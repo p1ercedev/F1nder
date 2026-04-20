@@ -473,12 +473,14 @@ fn search(app: &mut App) {
         app.list_state.select(Some(0));
     }
 }
-
 fn render_results(frame: &mut Frame, area: Rect, app: &mut App) {
     let block = Block::default()
         .borders(Borders::ALL)
         .title_bottom(format!(" RESULTS  {} entries ", app.entries.len()))
         .border_style(Style::default().fg(Color::DarkGray));
+
+    let inner_width = area.width.saturating_sub(2) as usize;
+    let cmd_width = inner_width.saturating_sub(4);
 
     let items: Vec<ListItem> = app
         .results
@@ -486,17 +488,27 @@ fn render_results(frame: &mut Frame, area: Rect, app: &mut App) {
         .filter_map(|&i| app.entries.get(i))
         .map(|e| {
             let breadcrumb = e.heading_path.join(" › ");
-            let lines = vec![
-                Line::from(Span::styled(
-                    breadcrumb,
+
+            let mut lines: Vec<Line> = Vec::new();
+
+            for chunk in textwrap::wrap(&breadcrumb, inner_width.max(1)) {
+                lines.push(Line::from(Span::styled(
+                    chunk.into_owned(),
                     Style::default().fg(Color::DarkGray),
-                )),
-                Line::from(vec![
-                    Span::styled("  $ ", Style::default().fg(Color::DarkGray)),
-                    Span::styled(&e.cmd, Style::default().fg(Color::White)),
-                ]),
-                Line::from(""), // blank separator
-            ];
+                )));
+            }
+
+            let wrapped = textwrap::wrap(&e.cmd, cmd_width.max(1));
+            for (idx, chunk) in wrapped.iter().enumerate() {
+                let prefix = if idx == 0 { "  $ " } else { "    " };
+                lines.push(Line::from(vec![
+                    Span::styled(prefix, Style::default().fg(Color::DarkGray)),
+                    Span::styled(chunk.to_string(), Style::default().fg(Color::White)),
+                ]));
+            }
+
+            lines.push(Line::from(""));
+
             ListItem::new(lines)
         })
         .collect();
@@ -506,10 +518,8 @@ fn render_results(frame: &mut Frame, area: Rect, app: &mut App) {
             .bg(Color::Rgb(20, 30, 40))
             .add_modifier(Modifier::BOLD),
     );
-
     frame.render_stateful_widget(list, area, &mut app.list_state);
 }
-
 fn render_chain(frame: &mut Frame, area: Rect, app: &App, chain_entries: Vec<&Entry>) {
     let selected = app.selected_entry();
 
