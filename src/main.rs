@@ -6,7 +6,7 @@ use std::{
 };
 
 use color_eyre::Result;
-use ratatui::widgets::ListState;
+use ratatui::{layout::Position, widgets::ListState};
 use serde::{Deserialize, Serialize};
 
 mod ui;
@@ -47,6 +47,7 @@ pub struct App {
     pub should_quit: bool,
     pub list_state: ListState,
     pub results: Vec<usize>,
+    pub cursor_index: usize,
 }
 
 impl App {
@@ -64,6 +65,7 @@ impl App {
             top_tab: 0,
             list_state,
             results: vec![],
+            cursor_index: 0,
         }
     }
 
