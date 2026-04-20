@@ -3,7 +3,7 @@ use std::fs;
 use std::io::stdout;
 use std::path::{Path, PathBuf};
 
-use crate::{App, Entry};
+use crate::{App, Chain, Entry};
 use color_eyre::Result;
 use color_eyre::eyre::eyre;
 use crossterm::cursor::{Hide, Show};
@@ -186,10 +186,18 @@ fn handle_key_event(app: &mut App, terminal: &mut DefaultTerminal) -> Result<boo
             KeyCode::Esc => return Ok(true),
 
             KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                app.list_state
-                    .selected()
-                    .and_then(|filtered_index| app.results.get(filtered_index))
-                    .and_then(|&i| Some(app.entries.remove(i)));
+                if let Some(entry_idx) = app.selected_entry_index() {
+                    app.entries.remove(entry_idx);
+                    search(app);
+
+                    if app.results.is_empty() {
+                        app.list_state.select(None);
+                    } else {
+                        let current = app.list_state.selected().unwrap_or(0);
+                        let new_sel = current.min(app.results.len() - 1);
+                        app.list_state.select(Some(new_sel));
+                    }
+                }
             }
             KeyCode::Char('a') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 let mut entry = Entry::new();
@@ -213,6 +221,12 @@ fn handle_key_event(app: &mut App, terminal: &mut DefaultTerminal) -> Result<boo
                 let updated_entry = parse_template(&entry.id)?;
 
                 app.entries.push(updated_entry);
+                search(app);
+
+                let new_entry_idx = app.entries.len() - 1;
+                if let Some(filtered_pos) = app.results.iter().position(|&i| i == new_entry_idx) {
+                    app.list_state.select(Some(filtered_pos));
+                }
 
                 // Re-enable raw mode and re-enter alternate screen
                 enable_raw_mode()?;
@@ -278,7 +292,7 @@ fn handle_key_event(app: &mut App, terminal: &mut DefaultTerminal) -> Result<boo
                 }
             }
             KeyCode::Up => {
-                let len = app.entries.len();
+                let len = app.results.len();
                 if len > 0 {
                     let i = app
                         .list_state
@@ -397,7 +411,11 @@ fn render_main(frame: &mut Frame, area: Rect, app: &mut App) {
         Layout::horizontal([Constraint::Percentage(60), Constraint::Percentage(40)]).split(area);
 
     render_results(frame, cols[0], app);
-    render_detail(frame, cols[1], app);
+
+    let right_rows =
+        Layout::vertical([Constraint::Percentage(20), Constraint::Percentage(80)]).split(cols[1]);
+
+    render_detail(frame, right_rows[0], app);
 }
 
 fn search(app: &mut App) {

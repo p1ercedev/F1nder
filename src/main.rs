@@ -34,6 +34,26 @@ impl Entry {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChainStep {
+    pub order: usize,
+    pub entry_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Chain {
+    pub name: String,
+    pub description: String,
+    pub steps: Vec<ChainStep>,
+    pub source_file: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChainsFile {
+    pub database_name: String,
+    pub chains: Vec<Chain>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EntriesFile {
     pub entries: Vec<Entry>,
 }
@@ -48,14 +68,21 @@ pub struct App {
     pub list_state: ListState,
     pub results: Vec<usize>,
     pub cursor_index: usize,
+    pub chains: Vec<Chain>,
+    pub entry_index: HashMap<String, usize>,
 }
 
 impl App {
-    pub fn new(entries: Vec<Entry>) -> Self {
+    pub fn new(entries: Vec<Entry>, chains: Vec<Chain>) -> Self {
         let mut list_state = ListState::default();
         if !entries.is_empty() {
             list_state.select(Some(0));
         }
+        let entry_index = entries
+            .iter()
+            .enumerate()
+            .map(|(i, e)| (e.id.clone(), i))
+            .collect();
         Self {
             entries,
             query: String::new(),
@@ -66,6 +93,8 @@ impl App {
             list_state,
             results: vec![],
             cursor_index: 0,
+            chains,
+            entry_index,
         }
     }
 
@@ -109,7 +138,7 @@ fn main() -> Result<()> {
     color_eyre::install()?;
     let mut entries: Vec<Entry> = Vec::new();
 
-    for dir_entry in fs::read_dir("JSONs")? {
+    for dir_entry in fs::read_dir("JSONs/cmds")? {
         let path = dir_entry?.path();
         if path.extension() != Some(OsStr::new("json")) {
             continue;
@@ -124,7 +153,21 @@ fn main() -> Result<()> {
         }
     }
 
-    let mut app = App::new(entries);
+    let mut chains: Vec<Chain> = Vec::new();
+    let chains_dir = Path::new("JSONs/chains");
+    if chains_dir.exists() {
+        for dir_entry in fs::read_dir(chains_dir)? {
+            let path = dir_entry?.path();
+            if path.extension() != Some(OsStr::new("json")) {
+                continue;
+            }
+            let text = fs::read_to_string(&path)?;
+            let cf: ChainsFile = serde_json::from_str(&text)?;
+            chains.extend(cf.chains);
+        }
+    }
+
+    let mut app = App::new(entries, chains);
 
     ratatui::run(|terminal| ui::run_event_loop(terminal, &mut app))?;
 
