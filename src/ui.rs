@@ -56,7 +56,7 @@ fn entry_to_template(entry: &Entry) -> String {
     out.push('\n');
 
     out.push_str("--- SOURCE-FILE (.json) ---\n");
-    out.push_str(&entry.description);
+    out.push_str(&entry.source_file.to_str().unwrap_or_default());
     out.push('\n');
 
     out.push_str("--- COMMANDS ---\n");
@@ -256,6 +256,7 @@ fn handle_key_event(app: &mut App, terminal: &mut DefaultTerminal) -> Result<boo
             }
             KeyCode::Tab => {
                 app.mode = (app.mode + 1) % 4;
+                search(app);
             }
 
             KeyCode::Char('[') => {
@@ -290,6 +291,7 @@ fn handle_key_event(app: &mut App, terminal: &mut DefaultTerminal) -> Result<boo
 
             KeyCode::Backspace => {
                 app.query.pop();
+                search(app);
             }
             KeyCode::Char(c)
                 if !key.modifiers.contains(KeyModifiers::CONTROL)
