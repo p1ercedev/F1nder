@@ -1,7 +1,7 @@
 use std::{
     collections::HashMap,
     ffi::OsStr,
-    fs,
+    fs::{self, OpenOptions},
     path::{Path, PathBuf},
 };
 
@@ -68,12 +68,24 @@ impl App {
     }
 
     pub fn write_entries_to_json(&self) -> Result<()> {
-        let mut entries_by_filename: HashMap<PathBuf, Vec<Entry>> = HashMap::new();
+        let mut entries_by_filename: HashMap<PathBuf, EntriesFile> = HashMap::new();
         for entry in &self.entries {
             entries_by_filename
                 .entry(entry.source_file.clone())
-                .or_insert(Vec::new())
-                .push(entry.clone())
+                .or_insert(EntriesFile {
+                    entries: Vec::<Entry>::new(),
+                })
+                .entries
+                .push(entry.clone());
+        }
+
+        for (filepath, ef) in &entries_by_filename {
+            let mut file = OpenOptions::new()
+                .write(true)
+                .create(true)
+                .truncate(true)
+                .open(filepath)?;
+            serde_json::to_writer_pretty(&mut file, &ef)?;
         }
         Ok(())
     }

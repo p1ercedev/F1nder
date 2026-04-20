@@ -94,7 +94,7 @@ fn parse_template(entry_id: &str) -> Result<Entry> {
                 continue;
             }
             "--- SOURCE-FILE ---" => {
-                section = Section::Commands;
+                section = Section::SourceFile;
                 continue;
             }
             _ => {}
@@ -102,31 +102,18 @@ fn parse_template(entry_id: &str) -> Result<Entry> {
 
         match section {
             Section::Title => {
-                if line.trim().is_empty() {
-                    return Err(eyre!("missing or empty TITLE section"));
-                }
-
                 title.push_str(line);
                 title.push('\n');
             }
             Section::HeadingPath => {
-                if line.trim().is_empty() {
-                    return Err(eyre!("missing or empty HEADING section"));
-                }
                 heading_raw.push_str(line);
                 heading_raw.push('\n');
             }
             Section::Description => {
-                if line.trim().is_empty() {
-                    return Err(eyre!("missing or empty DESCRIPTION section"));
-                }
                 description.push_str(line);
                 description.push('\n');
             }
             Section::Commands => {
-                if line.trim().is_empty() {
-                    return Err(eyre!("missing or empty COMMANDS section"));
-                }
                 if line.trim_start().starts_with('#') {
                     continue;
                 }
@@ -134,14 +121,24 @@ fn parse_template(entry_id: &str) -> Result<Entry> {
                 cmd.push('\n');
             }
             Section::SourceFile => {
-                if line.trim().is_empty() {
-                    return Err(eyre!("missing or empty SOURCE-FILE section"));
-                }
                 source_file.push_str(line);
                 source_file.push('\n');
             }
             Section::None => {} // lines before any section marker — ignore
         }
+    }
+
+    if title.trim().is_empty() {
+        return Err(eyre!("missing or empty TITLE section"));
+    }
+    if heading_raw.trim().is_empty() {
+        return Err(eyre!("missing or empty HEADING_PATH section"));
+    }
+    if description.trim().is_empty() {
+        return Err(eyre!("missing or empty DESCRIPTION section"));
+    }
+    if cmd.trim().is_empty() {
+        return Err(eyre!("missing or empty COMMANDS section"));
     }
 
     let new_entry = Entry {
@@ -163,9 +160,10 @@ fn handle_key_event(app: &mut App, terminal: &mut DefaultTerminal) -> Result<boo
         if key.kind != KeyEventKind::Press {
             return Ok(false);
         }
-        match (key.code, key.modifiers) {
-            (KeyCode::Esc, KeyModifiers::NONE) => return Ok(true),
-            (KeyCode::Char('e'), KeyModifiers::CONTROL) => {
+        match key.code {
+            KeyCode::Esc => return Ok(true),
+
+            KeyCode::Char('e') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 if let Some(entry) = app.selected_entry() {
                     let Some(selected_index) = app.selected_entry_index() else {
                         return Ok(false);
@@ -183,16 +181,15 @@ fn handle_key_event(app: &mut App, terminal: &mut DefaultTerminal) -> Result<boo
                         .status()
                         .expect("Failed to execute vim");
                     let updated_entry = parse_template(&entry.id)?;
+                    app.entries[selected_index] = updated_entry;
 
                     // Re-enable raw mode and re-enter alternate screen
                     enable_raw_mode()?;
                     execute!(stdout(), EnterAlternateScreen, Hide)?;
                     terminal.clear()?;
-
-                    app.entries[selected_index] = updated_entry;
                 }
             }
-            (KeyCode::Enter, KeyModifiers::NONE) => {
+            KeyCode::Enter => {
                 if let Some(entry) = app.selected_entry() {
                     if let Ok(mut cb) = arboard::Clipboard::new() {
                         let _ = cb.set_text(entry.cmd.clone());
@@ -200,20 +197,18 @@ fn handle_key_event(app: &mut App, terminal: &mut DefaultTerminal) -> Result<boo
                 }
                 return Ok(true);
             }
-            (KeyCode::Char('q'), KeyModifiers::NONE) if app.query.is_empty() => return Ok(true),
-
-            (KeyCode::Tab, KeyModifiers::NONE) => {
+            KeyCode::Tab => {
                 app.mode = (app.mode + 1) % 4;
             }
 
-            (KeyCode::Char('['), KeyModifiers::NONE) => {
+            KeyCode::Char('[') => {
                 app.top_tab = if app.top_tab == 0 { 1 } else { 0 };
             }
-            (KeyCode::Char(']'), KeyModifiers::NONE) => {
+            KeyCode::Char(']') => {
                 app.top_tab = (app.top_tab + 1) % 2;
             }
 
-            (KeyCode::Down, KeyModifiers::NONE) => {
+            KeyCode::Down => {
                 let len = app.results.len();
                 if len > 0 {
                     let i = app
@@ -224,7 +219,7 @@ fn handle_key_event(app: &mut App, terminal: &mut DefaultTerminal) -> Result<boo
                     app.list_state.select(Some(i));
                 }
             }
-            (KeyCode::Up, KeyModifiers::NONE) => {
+            KeyCode::Up => {
                 let len = app.entries.len();
                 if len > 0 {
                     let i = app
@@ -236,10 +231,13 @@ fn handle_key_event(app: &mut App, terminal: &mut DefaultTerminal) -> Result<boo
                 }
             }
 
-            (KeyCode::Backspace, KeyModifiers::NONE) => {
+            KeyCode::Backspace => {
                 app.query.pop();
             }
-            (KeyCode::Char(c), KeyModifiers::NONE) => {
+            KeyCode::Char(c)
+                if !key.modifiers.contains(KeyModifiers::CONTROL)
+                    && !key.modifiers.contains(KeyModifiers::ALT) =>
+            {
                 app.query.push(c);
                 search(app);
             }
@@ -353,12 +351,17 @@ fn search(app: &mut App) {
         _ => app.entries.iter().map(|e| e.cmd.clone()).collect(), // fallback = CMD
     };
 
-    let matches = pattern.match_list(haystacks.iter(), &mut matcher);
+    let mut scored: Vec<(usize, u32)> = Vec::new();
 
-    app.results = matches
-        .into_iter()
-        .filter_map(|(matched_str, _score)| haystacks.iter().position(|h| h == matched_str))
-        .collect();
+    for (i, haystack) in haystacks.iter().enumerate() {
+        let mut buf = Vec::new();
+        let hay = nucleo::Utf32Str::new(&haystack, &mut buf);
+        if let Some(score) = pattern.score(hay, &mut matcher) {
+            scored.push((i, score));
+        }
+    }
+    scored.sort_by(|a, b| b.1.cmp(&a.1));
+    app.results = scored.into_iter().map(|(i, _)| i).collect();
 
     if app.results.is_empty() {
         app.list_state.select(None);
