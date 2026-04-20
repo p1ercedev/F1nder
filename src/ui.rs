@@ -264,8 +264,18 @@ fn handle_key_event(app: &mut App, terminal: &mut DefaultTerminal) -> Result<boo
 
             KeyCode::Enter => {
                 if let Some(entry) = app.selected_entry() {
-                    if let Ok(mut cb) = arboard::Clipboard::new() {
-                        let _ = cb.set_text(entry.cmd.clone());
+                    use std::io::Write;
+                    use std::process::{Command, Stdio};
+
+                    if let Ok(mut child) = Command::new("xsel")
+                        .args(["--clipboard", "--input"])
+                        .stdin(Stdio::piped())
+                        .spawn()
+                    {
+                        if let Some(stdin) = child.stdin.as_mut() {
+                            let _ = stdin.write_all(entry.cmd.as_bytes());
+                        }
+                        let _ = child.wait();
                     }
                 }
                 return Ok(true);
