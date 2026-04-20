@@ -1,6 +1,7 @@
+use rand::{Rng, RngExt};
 use std::fs;
 use std::io::stdout;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::{App, Entry};
 use color_eyre::Result;
@@ -54,6 +55,10 @@ fn entry_to_template(entry: &Entry) -> String {
     out.push_str(&entry.description);
     out.push('\n');
 
+    out.push_str("--- SOURCE-FILE (.json) ---\n");
+    out.push_str(&entry.description);
+    out.push('\n');
+
     out.push_str("--- COMMANDS ---\n");
     out.push_str("# One command per block. Blocks separated by \"===\".\n");
     out.push_str("# Format:\n");
@@ -93,7 +98,7 @@ fn parse_template(entry_id: &str) -> Result<Entry> {
                 section = Section::Commands;
                 continue;
             }
-            "--- SOURCE-FILE ---" => {
+            "--- SOURCE-FILE (.json) ---" => {
                 section = Section::SourceFile;
                 continue;
             }
@@ -116,12 +121,29 @@ fn parse_template(entry_id: &str) -> Result<Entry> {
             Section::Commands => {
                 if line.trim_start().starts_with('#') {
                     continue;
-                }
+                } // Skip comments in template
                 cmd.push_str(line);
                 cmd.push('\n');
             }
             Section::SourceFile => {
-                source_file.push_str(line);
+                if line.trim_start().starts_with('#') {
+                    continue;
+                }
+
+                let mut file = line.trim().to_string();
+
+                if !file.ends_with(".json") {
+                    file.push_str(".json");
+                }
+
+                let path = Path::new(&file);
+                let full_path = if path.starts_with("JSONs") {
+                    path.to_path_buf()
+                } else {
+                    Path::new("JSONs").join(path)
+                };
+
+                source_file.push_str(full_path.to_string_lossy().as_ref());
                 source_file.push('\n');
             }
             Section::None => {} // lines before any section marker — ignore
@@ -163,6 +185,40 @@ fn handle_key_event(app: &mut App, terminal: &mut DefaultTerminal) -> Result<boo
         match key.code {
             KeyCode::Esc => return Ok(true),
 
+            KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                app.list_state
+                    .selected()
+                    .and_then(|filtered_index| app.results.get(filtered_index))
+                    .and_then(|&i| Some(app.entries.remove(i)));
+            }
+            KeyCode::Char('a') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                let mut entry = Entry::new();
+
+                let mut rng = rand::rng();
+                let id = format!("{:08x}", rng.random::<u32>());
+                entry.id = id;
+
+                // Disable raw mode and leave alternate screen
+                disable_raw_mode()?;
+                execute!(stdout(), LeaveAlternateScreen, Show)?;
+
+                let out = entry_to_template(&entry);
+                fs::write(TEMP_FILE_PATH, out)?;
+
+                std::process::Command::new("sh")
+                    .arg("-c")
+                    .arg("vim /tmp/temp.txt")
+                    .status()
+                    .expect("Failed to execute vim");
+                let updated_entry = parse_template(&entry.id)?;
+
+                app.entries.push(updated_entry);
+
+                // Re-enable raw mode and re-enter alternate screen
+                enable_raw_mode()?;
+                execute!(stdout(), EnterAlternateScreen, Hide)?;
+                terminal.clear()?;
+            }
             KeyCode::Char('e') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 if let Some(entry) = app.selected_entry() {
                     let Some(selected_index) = app.selected_entry_index() else {
@@ -189,6 +245,7 @@ fn handle_key_event(app: &mut App, terminal: &mut DefaultTerminal) -> Result<boo
                     terminal.clear()?;
                 }
             }
+
             KeyCode::Enter => {
                 if let Some(entry) = app.selected_entry() {
                     if let Ok(mut cb) = arboard::Clipboard::new() {

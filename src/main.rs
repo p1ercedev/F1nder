@@ -20,6 +20,18 @@ pub struct Entry {
     pub source_file: PathBuf,
     pub heading_path: Vec<String>,
 }
+impl Entry {
+    pub fn new() -> Self {
+        Self {
+            id: String::new(),
+            title: String::new(),
+            cmd: String::new(),
+            description: String::new(),
+            source_file: PathBuf::new(),
+            heading_path: Vec::new(),
+        }
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EntriesFile {
@@ -111,9 +123,10 @@ fn main() -> Result<()> {
     }
 
     let mut app = App::new(entries);
-    // app.write_entries_to_json()?;
 
     ratatui::run(|terminal| ui::run_event_loop(terminal, &mut app))?;
+
+    app.write_entries_to_json()?;
 
     Ok(())
 }
