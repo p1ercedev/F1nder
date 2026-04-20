@@ -14,7 +14,7 @@ use crossterm::terminal::{
 };
 use nucleo::Config;
 use nucleo::pattern::{CaseMatching, Normalization, Pattern};
-use ratatui::layout::{Alignment, Constraint, Layout, Rect};
+use ratatui::layout::{Alignment, Constraint, Layout, Position, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph, Tabs};
@@ -288,16 +288,27 @@ fn handle_key_event(app: &mut App, terminal: &mut DefaultTerminal) -> Result<boo
                     app.list_state.select(Some(i));
                 }
             }
-
+            KeyCode::Left => {
+                app.cursor_index = app.cursor_index.saturating_sub(1);
+            }
+            KeyCode::Right => {
+                if app.cursor_index < app.query.len() {
+                    app.cursor_index += 1;
+                }
+            }
             KeyCode::Backspace => {
-                app.query.pop();
-                search(app);
+                if app.cursor_index > 0 {
+                    app.cursor_index -= 1;
+                    app.query.remove(app.cursor_index);
+                    search(app);
+                }
             }
             KeyCode::Char(c)
                 if !key.modifiers.contains(KeyModifiers::CONTROL)
                     && !key.modifiers.contains(KeyModifiers::ALT) =>
             {
-                app.query.push(c);
+                app.query.insert(app.cursor_index, c);
+                app.cursor_index += 1;
                 search(app);
             }
             _ => {}
@@ -373,6 +384,11 @@ fn render_search_input(frame: &mut Frame, area: Rect, app: &App) {
     };
 
     let input = Paragraph::new(line).block(block);
+
+    frame.set_cursor_position(Position::new(
+        area.x + 1 + 2 + app.cursor_index as u16, // border + padding + index
+        area.y + 1,                               // border
+    ));
     frame.render_widget(input, area);
 }
 
