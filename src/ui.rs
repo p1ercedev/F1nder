@@ -1,6 +1,8 @@
-use rand::{Rng, RngExt};
+use rand::RngExt;
+use ratatui::widgets::Wrap;
 use std::fs;
 use std::io::stdout;
+use std::iter::chain;
 use std::path::{Path, PathBuf};
 
 use crate::{App, Chain, Entry};
@@ -412,10 +414,19 @@ fn render_main(frame: &mut Frame, area: Rect, app: &mut App) {
 
     render_results(frame, cols[0], app);
 
-    let right_rows =
-        Layout::vertical([Constraint::Percentage(20), Constraint::Percentage(80)]).split(cols[1]);
+    let right_rows = Layout::vertical([Constraint::Length(6), Constraint::Min(0)]).split(cols[1]);
 
     render_detail(frame, right_rows[0], app);
+
+    let entry_id = match app.selected_entry() {
+        Some(e) => e.id.clone(),
+        None => return,
+    };
+    // now no borrow of app is alive
+    if let Some(chain) = find_chain_for_entry(app, &entry_id) {
+        let chain_entries = resolve_chain_steps(app, chain);
+        render_chain(frame, right_rows[1], app, chain_entries);
+    }
 }
 
 fn search(app: &mut App) {
@@ -499,6 +510,45 @@ fn render_results(frame: &mut Frame, area: Rect, app: &mut App) {
     frame.render_stateful_widget(list, area, &mut app.list_state);
 }
 
+fn render_chain(frame: &mut Frame, area: Rect, app: &App, chain_entries: Vec<&Entry>) {
+    let selected = app.selected_entry();
+
+    let Some(entry) = selected else {
+        let p = Paragraph::new("No chain for this command")
+            .style(Style::default().fg(Color::DarkGray))
+            .alignment(Alignment::Center)
+            .block(Block::default().borders(Borders::ALL).title(" Details "));
+
+        frame.render_widget(p, area);
+        return;
+    };
+
+    let lines: Vec<Line> = chain_entries
+        .into_iter()
+        .flat_map(|chain_entry| {
+            let style = if chain_entry.id == entry.id {
+                Style::default()
+                    .fg(Color::White)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(Color::DarkGray)
+            };
+            vec![
+                Line::from(Span::styled(chain_entry.cmd.as_str(), style)),
+                Line::from(""),
+            ]
+        })
+        .collect();
+
+    let chain_widget = Paragraph::new(lines).wrap(Wrap { trim: false }).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::DarkGray)),
+    );
+
+    frame.render_widget(chain_widget, area);
+}
+
 fn render_detail(frame: &mut Frame, area: Rect, app: &App) {
     let selected = app.selected_entry();
     let Some(entry) = selected else {
@@ -511,13 +561,6 @@ fn render_detail(frame: &mut Frame, area: Rect, app: &App) {
         return;
     };
 
-    let cards = Layout::vertical([
-        Constraint::Length(6), // heading + title + command
-        Constraint::Length(5), // description
-        Constraint::Min(0),    // rest
-    ])
-    .split(area);
-
     // Top card: breadcrumb + title + primary command
     let breadcrumb = entry.heading_path.join(" › ");
     let top = Paragraph::new(vec![
@@ -526,17 +569,33 @@ fn render_detail(frame: &mut Frame, area: Rect, app: &App) {
             Style::default().fg(Color::DarkGray),
         )),
         Line::from(Span::styled(
-            entry.title.as_str(),
-            Style::default()
-                .fg(Color::White)
-                .add_modifier(Modifier::BOLD),
+            entry.description.as_str(),
+            Style::default().fg(Color::Gray),
         )),
         Line::from(""),
     ])
+    .wrap(Wrap { trim: false })
     .block(
         Block::default()
             .borders(Borders::ALL)
             .border_style(Style::default().fg(Color::DarkGray)),
     );
-    frame.render_widget(top, cards[0]);
+    frame.render_widget(top, area);
+}
+
+fn find_chain_for_entry<'a>(app: &'a App, entry_id: &str) -> Option<&'a Chain> {
+    app.chains
+        .iter()
+        .find(|c| c.steps.iter().any(|step| step.entry_id == entry_id))
+}
+fn resolve_chain_steps<'a>(app: &'a App, chain: &Chain) -> Vec<&'a Entry> {
+    chain
+        .steps
+        .iter()
+        .filter_map(|chain_step| {
+            app.entry_index
+                .get(&chain_step.entry_id)
+                .and_then(|chain_step_index| app.entries.get(*chain_step_index))
+        })
+        .collect()
 }

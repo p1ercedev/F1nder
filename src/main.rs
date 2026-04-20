@@ -6,7 +6,7 @@ use std::{
 };
 
 use color_eyre::Result;
-use ratatui::{layout::Position, widgets::ListState};
+use ratatui::widgets::ListState;
 use serde::{Deserialize, Serialize};
 
 mod ui;
