@@ -247,7 +247,6 @@ fn handle_key_event(app: &mut App, terminal: &mut DefaultTerminal) -> Result<boo
                 if let Some(filtered_pos) = app.results.iter().position(|&i| i == new_entry_idx) {
                     app.list_state.select(Some(filtered_pos));
                 }
-
                 app.current_chain_index = 0;
 
                 // Re-enable raw mode and re-enter alternate screen
@@ -299,7 +298,7 @@ fn handle_key_event(app: &mut App, terminal: &mut DefaultTerminal) -> Result<boo
                     let selected_id = selected.id.clone();
 
                     if let Some(chain) = app.find_chain_for_entry_mut(&prev_id) {
-                        if !chain.steps.contains(&prev_id) {
+                        if !chain.steps.contains(&selected_id) {
                             chain.steps.push(selected_id);
                         }
                     } else {
