@@ -206,7 +206,7 @@ fn handle_key_event(app: &mut App, terminal: &mut DefaultTerminal) -> Result<boo
                     }
                     app.chains.retain(|c| c.steps.len() >= 2);
 
-                    search(app);
+                    search(app, true);
 
                     if app.results.is_empty() {
                         app.list_state.select(None);
@@ -241,7 +241,7 @@ fn handle_key_event(app: &mut App, terminal: &mut DefaultTerminal) -> Result<boo
 
                 app.entries.push(updated_entry);
                 app.rebuild_entry_index();
-                search(app);
+                search(app, false);
 
                 let new_entry_idx = app.entries.len() - 1;
                 if let Some(filtered_pos) = app.results.iter().position(|&i| i == new_entry_idx) {
@@ -264,7 +264,7 @@ fn handle_key_event(app: &mut App, terminal: &mut DefaultTerminal) -> Result<boo
                 app.is_chain_edit_mode = !app.is_chain_edit_mode;
                 app.query.clear();
                 app.cursor_index = 0;
-                search(app);
+                search(app, false);
             }
             KeyCode::Char('e') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 if let Some(entry) = app.selected_entry() {
@@ -319,7 +319,7 @@ fn handle_key_event(app: &mut App, terminal: &mut DefaultTerminal) -> Result<boo
                 app.is_chain_edit_mode = false;
                 app.query.clear();
                 app.cursor_index = 0;
-                search(app);
+                search(app, true);
             }
             KeyCode::Enter => {
                 if let Some(entry) = app.selected_entry() {
@@ -346,7 +346,7 @@ fn handle_key_event(app: &mut App, terminal: &mut DefaultTerminal) -> Result<boo
                     SearchMode::ALL => SearchMode::TITLE,
                     SearchMode::CMD => SearchMode::ALL,
                 };
-                search(app);
+                search(app, true);
             }
             KeyCode::Tab => {
                 app.mode = match app.mode {
@@ -355,7 +355,7 @@ fn handle_key_event(app: &mut App, terminal: &mut DefaultTerminal) -> Result<boo
                     SearchMode::TITLE => SearchMode::ALL,
                     SearchMode::ALL => SearchMode::CMD,
                 };
-                search(app);
+                search(app, true);
             }
 
             KeyCode::Char('[') => {
@@ -401,7 +401,7 @@ fn handle_key_event(app: &mut App, terminal: &mut DefaultTerminal) -> Result<boo
                 if app.cursor_index > 0 {
                     app.cursor_index -= 1;
                     app.query.remove(app.cursor_index);
-                    search(app);
+                    search(app, true);
                 }
             }
             KeyCode::Char(c)
@@ -410,7 +410,7 @@ fn handle_key_event(app: &mut App, terminal: &mut DefaultTerminal) -> Result<boo
             {
                 app.query.insert(app.cursor_index, c);
                 app.cursor_index += 1;
-                search(app);
+                search(app, true);
             }
             _ => {}
         }
@@ -521,8 +521,10 @@ fn render_main(frame: &mut Frame, area: Rect, app: &mut App) {
     render_chain(frame, right_rows[1], current_chain, &entry_id);
 }
 
-fn search(app: &mut App) {
+fn search(app: &mut App, reset_selection: bool) {
     app.current_chain_index = 0;
+    let previous_selection = app.list_state.selected();
+
     if app.query.trim().is_empty() {
         app.results = (0..app.entries.len()).collect();
         return;
@@ -564,8 +566,13 @@ fn search(app: &mut App) {
 
     if app.results.is_empty() {
         app.list_state.select(None);
-    } else {
+    } else if reset_selection {
         app.list_state.select(Some(0));
+    } else {
+        match previous_selection {
+            None => app.list_state.select(None),
+            Some(i) => app.list_state.select(Some(i.min(app.results.len() - 1))),
+        }
     }
 }
 fn render_results(frame: &mut Frame, area: Rect, app: &mut App) {
