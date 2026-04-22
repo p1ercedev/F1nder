@@ -1,11 +1,12 @@
 use rand::RngExt;
 use ratatui::widgets::Wrap;
+use std::ffi::OsStr;
 use std::fs;
 use std::io::stdout;
 use std::iter::chain;
 use std::path::{Path, PathBuf};
 
-use crate::{App, Chain, Entry};
+use crate::{App, Chain, Entry, SearchMode};
 use color_eyre::Result;
 use color_eyre::eyre::eyre;
 use crossterm::cursor::{Hide, Show};
@@ -132,18 +133,26 @@ fn parse_template(entry_id: &str) -> Result<Entry> {
                     continue;
                 }
 
-                let mut file = line.trim().to_string();
-
-                if !file.ends_with(".json") {
-                    file.push_str(".json");
+                let trimmed = line.trim();
+                if trimmed.is_empty() {
+                    continue;
                 }
 
-                let path = Path::new(&file);
-                let full_path = if path.starts_with("JSONs") {
-                    path.to_path_buf()
+                // Extract just the filename, discarding any directory components
+                let filename = Path::new(trimmed)
+                    .file_name()
+                    .unwrap_or_else(|| OsStr::new(trimmed))
+                    .to_string_lossy()
+                    .to_string();
+
+                let filename = if filename.ends_with(".json") {
+                    filename
                 } else {
-                    Path::new("JSONs").join(path)
+                    format!("{}.json", filename)
                 };
+
+                // Always anchor under JSONs/cmds/
+                let full_path = Path::new("JSONs/cmds").join(filename);
 
                 source_file.push_str(full_path.to_string_lossy().as_ref());
                 source_file.push('\n');
@@ -186,10 +195,18 @@ fn handle_key_event(app: &mut App, terminal: &mut DefaultTerminal) -> Result<boo
         }
         match key.code {
             KeyCode::Esc => return Ok(true),
-
             KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                if let Some(entry_idx) = app.selected_entry_index() {
-                    app.entries.remove(entry_idx);
+                if let Some(entry_index) = app.selected_entry_index() {
+                    let removed_id = app.entries[entry_index].id.clone();
+                    app.entries.remove(entry_index);
+
+                    app.rebuild_entry_index();
+
+                    for chain in &mut app.chains {
+                        chain.steps.retain(|step_id| step_id != &removed_id);
+                    }
+                    app.chains.retain(|c| c.steps.len() >= 2);
+
                     search(app);
 
                     if app.results.is_empty() {
@@ -200,6 +217,7 @@ fn handle_key_event(app: &mut App, terminal: &mut DefaultTerminal) -> Result<boo
                         app.list_state.select(Some(new_sel));
                     }
                 }
+                app.current_chain_index = 0;
             }
             KeyCode::Char('a') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 let mut entry = Entry::new();
@@ -230,10 +248,23 @@ fn handle_key_event(app: &mut App, terminal: &mut DefaultTerminal) -> Result<boo
                     app.list_state.select(Some(filtered_pos));
                 }
 
+                app.current_chain_index = 0;
+
                 // Re-enable raw mode and re-enter alternate screen
                 enable_raw_mode()?;
                 execute!(stdout(), EnterAlternateScreen, Hide)?;
                 terminal.clear()?;
+            }
+            KeyCode::Char('n') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                if !app.is_chain_edit_mode {
+                    if let Some(entry) = app.selected_entry() {
+                        app.prev_selected_entry_id = entry.id.clone();
+                    }
+                }
+                app.is_chain_edit_mode = !app.is_chain_edit_mode;
+                app.query.clear();
+                app.cursor_index = 0;
+                search(app);
             }
             KeyCode::Char('e') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 if let Some(entry) = app.selected_entry() {
@@ -261,7 +292,33 @@ fn handle_key_event(app: &mut App, terminal: &mut DefaultTerminal) -> Result<boo
                     terminal.clear()?;
                 }
             }
+            KeyCode::Enter if app.is_chain_edit_mode => {
+                let prev_id = app.prev_selected_entry_id.clone();
 
+                if let Some(selected) = app.selected_entry() {
+                    let selected_id = selected.id.clone();
+
+                    if let Some(chain) = app.find_chain_for_entry_mut(&prev_id) {
+                        chain.steps.push(selected_id);
+                    } else {
+                        // Create new chain
+                        let mut rng = rand::rng();
+                        let chain_id = format!("{:08x}", rng.random::<u32>());
+
+                        app.chains.push(Chain {
+                            id: chain_id,
+                            steps: vec![prev_id, selected_id],
+                            name: String::from("new-chain"),
+                            description: String::from("new-chain"),
+                        });
+                    }
+                }
+                app.current_chain_index = 0;
+                app.is_chain_edit_mode = false;
+                app.query.clear();
+                app.cursor_index = 0;
+                search(app);
+            }
             KeyCode::Enter => {
                 if let Some(entry) = app.selected_entry() {
                     use std::io::Write;
@@ -281,7 +338,12 @@ fn handle_key_event(app: &mut App, terminal: &mut DefaultTerminal) -> Result<boo
                 return Ok(true);
             }
             KeyCode::Tab => {
-                app.mode = (app.mode + 1) % 4;
+                app.mode = match app.mode {
+                    SearchMode::CMD => SearchMode::TITLE,
+                    SearchMode::TITLE => SearchMode::HEADING,
+                    SearchMode::HEADING => SearchMode::ALL,
+                    SearchMode::ALL => SearchMode::CMD,
+                };
                 search(app);
             }
 
@@ -302,6 +364,7 @@ fn handle_key_event(app: &mut App, terminal: &mut DefaultTerminal) -> Result<boo
                         .unwrap_or(0);
                     app.list_state.select(Some(i));
                 }
+                app.current_chain_index = 0;
             }
             KeyCode::Up => {
                 let len = app.results.len();
@@ -313,6 +376,7 @@ fn handle_key_event(app: &mut App, terminal: &mut DefaultTerminal) -> Result<boo
                         .unwrap_or(0);
                     app.list_state.select(Some(i));
                 }
+                app.current_chain_index = 0;
             }
             KeyCode::Left => {
                 app.cursor_index = app.cursor_index.saturating_sub(1);
@@ -375,18 +439,11 @@ fn render_top_tabs(frame: &mut Frame, area: Rect, app: &App) {
 }
 
 fn render_search_input(frame: &mut Frame, area: Rect, app: &App) {
-    let mode_label = match app.mode {
-        0 => "CMD",
-        1 => "TITLE",
-        2 => "HEADING",
-        3 => "ALL",
-        _ => "?",
-    };
-
+    // TODO: FIX ME
     let mode_title = Line::from(vec![
         Span::raw(" "),
         Span::styled(
-            format!(" {} ", mode_label),
+            format!(" {} ", app.mode.to_string()),
             Style::default()
                 .bg(Color::Cyan)
                 .fg(Color::Black)
@@ -395,10 +452,14 @@ fn render_search_input(frame: &mut Frame, area: Rect, app: &App) {
         Span::raw(" "),
     ]);
 
-    let block = Block::default()
+    let mut block = Block::default()
+        .title_top(mode_title)
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::DarkGray))
-        .title(mode_title);
+        .border_style(Style::default().fg(Color::DarkGray));
+
+    if app.is_chain_edit_mode {
+        block = block.title_bottom(Line::from("CHAIN_EDIT_MODE").left_aligned());
+    }
 
     let line = if app.query.is_empty() {
         Line::from(vec![Span::raw("  ")])
@@ -432,14 +493,21 @@ fn render_main(frame: &mut Frame, area: Rect, app: &mut App) {
         Some(e) => e.id.clone(),
         None => return,
     };
-    // now no borrow of app is alive
-    if let Some(chain) = find_chain_for_entry(app, &entry_id) {
-        let chain_entries = resolve_chain_steps(app, chain);
-        render_chain(frame, right_rows[1], app, chain_entries);
+
+    let chains = app.find_chains_for_entry(&entry_id);
+
+    let chain_entries: Vec<Vec<&Entry>> = chains
+        .iter()
+        .map(|chain| app.resolve_chain_steps(chain))
+        .collect();
+
+    if let Some(current_chain) = chain_entries.get(app.current_chain_index) {
+        render_chain(frame, right_rows[1], current_chain, &entry_id);
     }
 }
 
 fn search(app: &mut App) {
+    app.current_chain_index = 0;
     if app.query.trim().is_empty() {
         app.results = (0..app.entries.len()).collect();
         return;
@@ -448,29 +516,31 @@ fn search(app: &mut App) {
     let mut matcher = nucleo::Matcher::new(Config::DEFAULT);
     let pattern = Pattern::parse(&app.query, CaseMatching::Ignore, Normalization::Smart);
 
-    let haystacks: Vec<String> = match app.mode {
-        0 => app.entries.iter().map(|e| e.cmd.clone()).collect(), // CMD
-        1 => app.entries.iter().map(|e| e.title.clone()).collect(), // TITLE
-        2 => app
-            .entries
-            .iter()
-            .map(|e| e.heading_path.join(" ").clone())
-            .collect(),
-
-        3 => app
-            .entries
-            .iter() // ALL
-            .map(|e| format!("{} {} {}", e.cmd, e.title, e.heading_path.join(" ")))
-            .collect(),
-        _ => app.entries.iter().map(|e| e.cmd.clone()).collect(), // fallback = CMD
-    };
-
     let mut scored: Vec<(usize, u32)> = Vec::new();
 
-    for (i, haystack) in haystacks.iter().enumerate() {
+    for (i, entry) in app.entries.iter().enumerate() {
         let mut buf = Vec::new();
-        let hay = nucleo::Utf32Str::new(&haystack, &mut buf);
-        if let Some(score) = pattern.score(hay, &mut matcher) {
+        let temp_string: String;
+
+        let haystack = match app.mode {
+            SearchMode::CMD => nucleo::Utf32Str::new(&entry.cmd.as_str(), &mut buf),
+            SearchMode::TITLE => nucleo::Utf32Str::new(&entry.title.as_str(), &mut buf),
+            SearchMode::HEADING => {
+                temp_string = entry.heading_path.join(">");
+                nucleo::Utf32Str::new(&temp_string, &mut buf)
+            }
+
+            SearchMode::ALL => {
+                temp_string = format!(
+                    "{} {} {}",
+                    entry.cmd,
+                    entry.title,
+                    entry.heading_path.join(" ")
+                );
+                nucleo::Utf32Str::new(&temp_string, &mut buf)
+            }
+        };
+        if let Some(score) = pattern.score(haystack, &mut matcher) {
             scored.push((i, score));
         }
     }
@@ -530,10 +600,13 @@ fn render_results(frame: &mut Frame, area: Rect, app: &mut App) {
     );
     frame.render_stateful_widget(list, area, &mut app.list_state);
 }
-fn render_chain(frame: &mut Frame, area: Rect, app: &App, chain_entries: Vec<&Entry>) {
-    let selected = app.selected_entry();
-
-    let Some(entry) = selected else {
+fn render_chain(
+    frame: &mut Frame,
+    area: Rect,
+    chain_entries: &Vec<&Entry>,
+    selected_entry_id: &str,
+) {
+    if chain_entries.is_empty() {
         let p = Paragraph::new("No chain for this command")
             .style(Style::default().fg(Color::DarkGray))
             .alignment(Alignment::Center)
@@ -544,9 +617,9 @@ fn render_chain(frame: &mut Frame, area: Rect, app: &App, chain_entries: Vec<&En
     };
 
     let lines: Vec<Line> = chain_entries
-        .into_iter()
+        .iter()
         .flat_map(|chain_entry| {
-            let style = if chain_entry.id == entry.id {
+            let style = if selected_entry_id == chain_entry.id {
                 Style::default()
                     .fg(Color::White)
                     .add_modifier(Modifier::BOLD)
@@ -560,7 +633,7 @@ fn render_chain(frame: &mut Frame, area: Rect, app: &App, chain_entries: Vec<&En
         })
         .collect();
 
-    let chain_widget = Paragraph::new(lines).wrap(Wrap { trim: false }).block(
+    let chain_widget: Paragraph<'_> = Paragraph::new(lines).wrap(Wrap { trim: false }).block(
         Block::default()
             .borders(Borders::ALL)
             .border_style(Style::default().fg(Color::DarkGray)),
@@ -601,21 +674,4 @@ fn render_detail(frame: &mut Frame, area: Rect, app: &App) {
             .border_style(Style::default().fg(Color::DarkGray)),
     );
     frame.render_widget(top, area);
-}
-
-fn find_chain_for_entry<'a>(app: &'a App, entry_id: &str) -> Option<&'a Chain> {
-    app.chains
-        .iter()
-        .find(|c| c.steps.iter().any(|step| step.entry_id == entry_id))
-}
-fn resolve_chain_steps<'a>(app: &'a App, chain: &Chain) -> Vec<&'a Entry> {
-    chain
-        .steps
-        .iter()
-        .filter_map(|chain_step| {
-            app.entry_index
-                .get(&chain_step.entry_id)
-                .and_then(|chain_step_index| app.entries.get(*chain_step_index))
-        })
-        .collect()
 }
