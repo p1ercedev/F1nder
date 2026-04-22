@@ -299,7 +299,9 @@ fn handle_key_event(app: &mut App, terminal: &mut DefaultTerminal) -> Result<boo
                     let selected_id = selected.id.clone();
 
                     if let Some(chain) = app.find_chain_for_entry_mut(&prev_id) {
-                        chain.steps.push(selected_id);
+                        if !chain.steps.contains(&prev_id) {
+                            chain.steps.push(selected_id);
+                        }
                     } else {
                         // Create new chain
                         let mut rng = rand::rng();
@@ -499,11 +501,15 @@ fn render_main(frame: &mut Frame, area: Rect, app: &mut App) {
     let chain_entries: Vec<Vec<&Entry>> = chains
         .iter()
         .map(|chain| app.resolve_chain_steps(chain))
+        .filter(|steps| !steps.is_empty())
         .collect();
 
-    if let Some(current_chain) = chain_entries.get(app.current_chain_index) {
-        render_chain(frame, right_rows[1], current_chain, &entry_id);
-    }
+    let current_chain = chain_entries
+        .get(app.current_chain_index)
+        .map(|v| v.as_slice())
+        .unwrap_or(&[]);
+
+    render_chain(frame, right_rows[1], current_chain, &entry_id);
 }
 
 fn search(app: &mut App) {
@@ -600,17 +606,17 @@ fn render_results(frame: &mut Frame, area: Rect, app: &mut App) {
     );
     frame.render_stateful_widget(list, area, &mut app.list_state);
 }
-fn render_chain(
-    frame: &mut Frame,
-    area: Rect,
-    chain_entries: &Vec<&Entry>,
-    selected_entry_id: &str,
-) {
+fn render_chain(frame: &mut Frame, area: Rect, chain_entries: &[&Entry], selected_entry_id: &str) {
     if chain_entries.is_empty() {
         let p = Paragraph::new("No chain for this command")
             .style(Style::default().fg(Color::DarkGray))
             .alignment(Alignment::Center)
-            .block(Block::default().borders(Borders::ALL).title(" Details "));
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title(" ATTACK CHAIN ")
+                    .title_alignment(Alignment::Center),
+            );
 
         frame.render_widget(p, area);
         return;
@@ -627,6 +633,7 @@ fn render_chain(
                 Style::default().fg(Color::DarkGray)
             };
             vec![
+                Line::from(""),
                 Line::from(Span::styled(chain_entry.cmd.as_str(), style)),
                 Line::from(""),
             ]
@@ -636,6 +643,8 @@ fn render_chain(
     let chain_widget: Paragraph<'_> = Paragraph::new(lines).wrap(Wrap { trim: false }).block(
         Block::default()
             .borders(Borders::ALL)
+            .title_top(" ATTACK CHAIN ")
+            .title_alignment(Alignment::Center)
             .border_style(Style::default().fg(Color::DarkGray)),
     );
 
@@ -644,11 +653,17 @@ fn render_chain(
 
 fn render_detail(frame: &mut Frame, area: Rect, app: &App) {
     let selected = app.selected_entry();
+
     let Some(entry) = selected else {
-        let p = Paragraph::new("Select an entry")
+        let p = Paragraph::new(vec![Line::from(""), Line::from("Select an entry")])
             .style(Style::default().fg(Color::DarkGray))
             .alignment(Alignment::Center)
-            .block(Block::default().borders(Borders::ALL).title(" Details "));
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title(" DESCRIPTION ")
+                    .title_alignment(Alignment::Center),
+            );
 
         frame.render_widget(p, area);
         return;
@@ -657,6 +672,7 @@ fn render_detail(frame: &mut Frame, area: Rect, app: &App) {
     // Top card: breadcrumb + title + primary command
     let breadcrumb = entry.heading_path.join(" › ");
     let top = Paragraph::new(vec![
+        Line::from(""),
         Line::from(Span::styled(
             breadcrumb,
             Style::default().fg(Color::DarkGray),
@@ -671,7 +687,9 @@ fn render_detail(frame: &mut Frame, area: Rect, app: &App) {
     .block(
         Block::default()
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::DarkGray)),
+            .border_style(Style::default().fg(Color::DarkGray))
+            .title(" DESCRIPTION ")
+            .title_alignment(Alignment::Center),
     );
     frame.render_widget(top, area);
 }
