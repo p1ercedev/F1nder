@@ -88,8 +88,8 @@ pub struct EntriesFile {
 #[derive(Debug, Display)]
 pub enum SearchMode {
     CMD,
-    TITLE,
     HEADING,
+    TITLE,
     ALL,
 }
 pub struct App {
