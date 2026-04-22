@@ -371,7 +371,7 @@ fn handle_key_event(app: &mut App, terminal: &mut DefaultTerminal) -> Result<boo
                     let i = app
                         .list_state
                         .selected()
-                        .map(|i| if i == len - 1 { 0 } else { i + 1 })
+                        .map(|i| if i == len - 1 { len - 1 } else { i + 1 })
                         .unwrap_or(0);
                     app.list_state.select(Some(i));
                 }
@@ -383,7 +383,7 @@ fn handle_key_event(app: &mut App, terminal: &mut DefaultTerminal) -> Result<boo
                     let i = app
                         .list_state
                         .selected()
-                        .map(|i| if i == 0 { len - 1 } else { i - 1 })
+                        .map(|i| if i == 0 { 0 } else { i - 1 })
                         .unwrap_or(0);
                     app.list_state.select(Some(i));
                 }
