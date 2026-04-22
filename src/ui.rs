@@ -234,9 +234,9 @@ fn handle_key_event(app: &mut App, terminal: &mut DefaultTerminal) -> Result<boo
 
                 std::process::Command::new("sh")
                     .arg("-c")
-                    .arg("vim /tmp/temp.txt")
+                    .arg("nvim /tmp/temp.txt")
                     .status()
-                    .expect("Failed to execute vim");
+                    .expect("Failed to execute nvim");
                 let updated_entry = parse_template(&entry.id)?;
 
                 app.entries.push(updated_entry);
@@ -280,9 +280,9 @@ fn handle_key_event(app: &mut App, terminal: &mut DefaultTerminal) -> Result<boo
 
                     std::process::Command::new("sh")
                         .arg("-c")
-                        .arg("vim /tmp/temp.txt")
+                        .arg("nvim /tmp/temp.txt")
                         .status()
-                        .expect("Failed to execute vim");
+                        .expect("Failed to execute nvim");
                     let updated_entry = parse_template(&entry.id)?;
                     app.entries[selected_index] = updated_entry;
 
