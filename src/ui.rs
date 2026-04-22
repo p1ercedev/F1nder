@@ -341,9 +341,9 @@ fn handle_key_event(app: &mut App, terminal: &mut DefaultTerminal) -> Result<boo
             }
             KeyCode::Tab => {
                 app.mode = match app.mode {
-                    SearchMode::CMD => SearchMode::TITLE,
-                    SearchMode::TITLE => SearchMode::HEADING,
-                    SearchMode::HEADING => SearchMode::ALL,
+                    SearchMode::CMD => SearchMode::HEADING,
+                    SearchMode::HEADING => SearchMode::TITLE,
+                    SearchMode::TITLE => SearchMode::ALL,
                     SearchMode::ALL => SearchMode::CMD,
                 };
                 search(app);
