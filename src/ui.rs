@@ -3,7 +3,6 @@ use ratatui::widgets::Wrap;
 use std::ffi::OsStr;
 use std::fs;
 use std::io::stdout;
-use std::iter::chain;
 use std::path::{Path, PathBuf};
 
 use crate::{App, Chain, Entry, SearchMode};
@@ -241,6 +240,7 @@ fn handle_key_event(app: &mut App, terminal: &mut DefaultTerminal) -> Result<boo
                 let updated_entry = parse_template(&entry.id)?;
 
                 app.entries.push(updated_entry);
+                app.rebuild_entry_index();
                 search(app);
 
                 let new_entry_idx = app.entries.len() - 1;
