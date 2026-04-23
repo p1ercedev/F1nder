@@ -72,7 +72,7 @@ fn entry_to_template(entry: &Entry) -> String {
     out
 }
 
-fn parse_template(entry_id: &str) -> Result<Entry> {
+fn parse_template(entry_id: &str, app: &App) -> Result<Entry> {
     let contents = fs::read_to_string(TEMP_FILE_PATH)?;
     let mut section = Section::None;
 
@@ -153,7 +153,7 @@ fn parse_template(entry_id: &str) -> Result<Entry> {
                 };
 
                 // Always anchor under JSONs/cmds/
-                let full_path = Path::new("JSONs/cmds").join(filename);
+                let full_path = app.cmds_dir.join(filename);
 
                 source_file.push_str(full_path.to_string_lossy().as_ref());
                 source_file.push('\n');
@@ -239,7 +239,7 @@ fn handle_key_event(app: &mut App, terminal: &mut DefaultTerminal) -> Result<boo
                     .arg("nvim /tmp/temp.txt")
                     .status()
                     .expect("Failed to execute nvim");
-                let updated_entry = parse_template(&entry.id)?;
+                let updated_entry = parse_template(&entry.id, &app)?;
 
                 app.entries.push(updated_entry);
                 app.rebuild_entry_index();
@@ -284,7 +284,7 @@ fn handle_key_event(app: &mut App, terminal: &mut DefaultTerminal) -> Result<boo
                         .arg("nvim /tmp/temp.txt")
                         .status()
                         .expect("Failed to execute nvim");
-                    let updated_entry = parse_template(&entry.id)?;
+                    let updated_entry = parse_template(&entry.id, &app)?;
                     app.entries[selected_index] = updated_entry;
 
                     // Re-enable raw mode and re-enter alternate screen
