@@ -2,11 +2,11 @@ use std::{
     collections::{HashMap, HashSet},
     ffi::OsStr,
     fs::{self, OpenOptions},
-    path::{Path, PathBuf},
+    path::PathBuf,
 };
 use strum::Display;
 
-use color_eyre::{Result, eyre::Ok};
+use color_eyre::{Result, eyre::eyre};
 use ratatui::widgets::ListState;
 use serde::{Deserialize, Serialize};
 
@@ -46,6 +46,7 @@ pub struct Chain {
     )]
     pub steps: Vec<String>,
 }
+
 fn deserialize_steps<'de, D>(deserializer: D) -> std::result::Result<Vec<String>, D::Error>
 where
     D: serde::Deserializer<'de>,
@@ -92,6 +93,7 @@ pub enum SearchMode {
     TITLE,
     ALL,
 }
+
 pub struct App {
     pub top_tab: usize,
     pub entries: Vec<Entry>,
@@ -105,10 +107,17 @@ pub struct App {
     pub is_chain_edit_mode: bool,
     pub prev_selected_entry_id: String,
     pub current_chain_index: usize,
+    pub cmds_dir: PathBuf,
+    pub chains_dir: PathBuf,
 }
 
 impl App {
-    pub fn new(entries: Vec<Entry>, chains: Vec<Chain>) -> Self {
+    pub fn new(
+        entries: Vec<Entry>,
+        chains: Vec<Chain>,
+        cmds_dir: PathBuf,
+        chains_dir: PathBuf,
+    ) -> Self {
         let mut list_state = ListState::default();
         if !entries.is_empty() {
             list_state.select(Some(0));
@@ -131,6 +140,8 @@ impl App {
             is_chain_edit_mode: false,
             prev_selected_entry_id: String::from(""),
             current_chain_index: 0,
+            cmds_dir,
+            chains_dir,
         }
     }
 
@@ -140,11 +151,13 @@ impl App {
             .and_then(|filtered_index| self.results.get(filtered_index))
             .and_then(|&i| self.entries.get(i))
     }
+
     pub fn selected_entry_index(&self) -> Option<usize> {
         self.list_state
             .selected()
             .and_then(|i| self.results.get(i).copied())
     }
+
     pub fn rebuild_entry_index(&mut self) {
         self.entry_index = self
             .entries
@@ -160,9 +173,7 @@ impl App {
         for entry in &self.entries {
             entries_by_filename
                 .entry(entry.source_file.clone())
-                .or_insert(EntriesFile {
-                    entries: Vec::<Entry>::new(),
-                })
+                .or_insert(EntriesFile { entries: vec![] })
                 .entries
                 .push(entry.clone());
         }
@@ -176,15 +187,18 @@ impl App {
             serde_json::to_writer_pretty(&mut file, &ef)?;
         }
 
-        for dir_entry in fs::read_dir("JSONs/cmds")? {
-            let path = dir_entry?.path();
-            if path.extension() != Some(OsStr::new("json")) {
-                continue;
-            }
-            if !entries_by_filename.contains_key(&path) {
-                fs::remove_file(&path)?;
+        if !entries_by_filename.is_empty() {
+            for dir_entry in fs::read_dir(&self.cmds_dir)? {
+                let path = dir_entry?.path();
+                if path.extension() != Some(OsStr::new("json")) {
+                    continue;
+                }
+                if !entries_by_filename.contains_key(&path) {
+                    fs::remove_file(&path)?;
+                }
             }
         }
+
         Ok(())
     }
 
@@ -208,9 +222,9 @@ impl App {
                         .file_stem()
                         .unwrap_or_default()
                         .to_string_lossy();
-                    PathBuf::from(format!("JSONs/chains/{}-chains.json", stem))
+                    self.chains_dir.join(format!("{}-chains.json", stem))
                 }
-                None => PathBuf::from("JSONs/chains/orphaned-chains.json"),
+                None => self.chains_dir.join("orphaned-chains.json"),
             };
 
             chains_by_filename
@@ -229,8 +243,8 @@ impl App {
             serde_json::to_writer_pretty(&mut file, &cf)?;
         }
 
-        if Path::new("JSONs/chains").exists() {
-            for dir_entry in fs::read_dir("JSONs/chains")? {
+        if !chains_by_filename.is_empty() && self.chains_dir.exists() {
+            for dir_entry in fs::read_dir(&self.chains_dir)? {
                 let path = dir_entry?.path();
                 if path.extension() != Some(OsStr::new("json")) {
                     continue;
@@ -240,6 +254,7 @@ impl App {
                 }
             }
         }
+
         Ok(())
     }
 
@@ -255,7 +270,7 @@ impl App {
         self.chains
             .iter()
             .filter(|c| c.steps.iter().any(|step| step == entry_id))
-            .collect::<Vec<&Chain>>()
+            .collect()
     }
 
     pub fn resolve_chain_steps<'a>(&'a self, chain: &Chain) -> Vec<&'a Entry> {
@@ -265,7 +280,7 @@ impl App {
             .filter_map(|entry_id| {
                 self.entry_index
                     .get(entry_id)
-                    .and_then(|chain_step_index| self.entries.get(*chain_step_index))
+                    .and_then(|i| self.entries.get(*i))
             })
             .collect()
     }
@@ -273,17 +288,34 @@ impl App {
 
 fn main() -> Result<()> {
     color_eyre::install()?;
-    let mut entries: Vec<Entry> = Vec::new();
 
-    for dir_entry in fs::read_dir("JSONs/cmds")? {
+    let exe_path = std::env::current_exe()?;
+    let root = exe_path
+        .parent()
+        .and_then(|p| p.parent())
+        .and_then(|p| p.parent())
+        .ok_or_else(|| eyre!("Could not determine root path from executable location"))?
+        .canonicalize()?;
+
+    let cmds_dir = root.join("JSONs/cmds");
+    let chains_dir = root.join("JSONs/chains");
+
+    if !(cmds_dir.exists() && chains_dir.exists()) {
+        return Err(eyre!(
+            "Cannot find JSON dirs:\n  {}\n  {}",
+            cmds_dir.display(),
+            chains_dir.display()
+        ));
+    }
+
+    let mut entries: Vec<Entry> = Vec::new();
+    for dir_entry in fs::read_dir(&cmds_dir)? {
         let path = dir_entry?.path();
         if path.extension() != Some(OsStr::new("json")) {
             continue;
         }
-
         let text = fs::read_to_string(&path)?;
         let ef: EntriesFile = serde_json::from_str(&text)?;
-
         for mut e in ef.entries {
             e.source_file = path.clone();
             entries.push(e);
@@ -291,30 +323,20 @@ fn main() -> Result<()> {
     }
 
     let mut chains: Vec<Chain> = Vec::new();
-    let chains_dir = Path::new("JSONs/chains");
-
-    if chains_dir.exists() {
-        for dir_entry in fs::read_dir(chains_dir)? {
-            let path = dir_entry?.path();
-            if path.extension() != Some(OsStr::new("json")) {
-                continue;
-            }
-
-            let text = fs::read_to_string(&path)?;
-            let cf: ChainsFile = serde_json::from_str(&text)?;
-
-            chains.extend(cf.chains);
+    for dir_entry in fs::read_dir(&chains_dir)? {
+        let path = dir_entry?.path();
+        if path.extension() != Some(OsStr::new("json")) {
+            continue;
         }
+        let text = fs::read_to_string(&path)?;
+        let cf: ChainsFile = serde_json::from_str(&text)?;
+        chains.extend(cf.chains);
     }
-    let valid_ids: HashSet<String> = entries.iter().map(|e| e.id.clone()).collect();
 
-    chains.retain(|chain| {
-        chain
-            .steps
-            .iter()
-            .any(|step_id| valid_ids.contains(step_id))
-    });
-    let mut app = App::new(entries, chains);
+    let valid_ids: HashSet<String> = entries.iter().map(|e| e.id.clone()).collect();
+    chains.retain(|chain| chain.steps.iter().any(|id| valid_ids.contains(id)));
+
+    let mut app = App::new(entries, chains, cmds_dir, chains_dir);
 
     ratatui::run(|terminal| ui::run_event_loop(terminal, &mut app))?;
 
