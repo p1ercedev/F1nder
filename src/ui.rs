@@ -146,6 +146,8 @@ fn parse_template(entry_id: &str) -> Result<Entry> {
 
                 let filename = if filename.ends_with(".json") {
                     filename
+                } else if !filename.contains("-cmds") {
+                    format!("{}-cmds.json", filename)
                 } else {
                     format!("{}.json", filename)
                 };
