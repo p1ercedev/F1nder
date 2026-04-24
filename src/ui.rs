@@ -23,8 +23,6 @@ use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph, Tabs};
 use ratatui::{DefaultTerminal, Frame};
 use std::process::Command;
 
-const TEMP_FILE_PATH: &str = "/tmp/temp.txt";
-
 enum Section {
     None,
     Title,
@@ -250,7 +248,6 @@ fn handle_key_event(app: &mut App, terminal: &mut DefaultTerminal) -> Result<boo
                 execute!(stdout(), LeaveAlternateScreen, Show)?;
 
                 let out = entry_to_template(&entry);
-                fs::write(TEMP_FILE_PATH, out)?;
 
                 #[cfg(target_os = "windows")]
                 let tmp_path =
@@ -258,6 +255,8 @@ fn handle_key_event(app: &mut App, terminal: &mut DefaultTerminal) -> Result<boo
 
                 #[cfg(not(target_os = "windows"))]
                 let tmp_path = "/tmp/temp.txt".to_string();
+
+                fs::write(tmp_path, out)?;
 
                 open_editor(&tmp_path).expect("Failed to execute editor");
                 let updated_entry = parse_template(&entry.id, &app)?;
