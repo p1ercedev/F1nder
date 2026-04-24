@@ -21,6 +21,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph, Tabs};
 use ratatui::{DefaultTerminal, Frame};
+use std::process::Command;
 
 const TEMP_FILE_PATH: &str = "/tmp/temp.txt";
 
@@ -189,6 +190,23 @@ fn parse_template(entry_id: &str, app: &App) -> Result<Entry> {
     };
     Ok(new_entry)
 }
+
+fn open_editor(path: &str) -> std::io::Result<std::process::ExitStatus> {
+    #[cfg(target_os = "windows")]
+    {
+        Command::new("nvim").args(path).status()
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        let editor = std::env::var("EDITOR").unwrap_or_else(|_| "nvim".to_string());
+        Command::new("sh")
+            .arg("-c")
+            .arg(format!("{} {}", editor, path))
+            .status()
+    }
+}
+
 fn handle_key_event(app: &mut App, terminal: &mut DefaultTerminal) -> Result<bool> {
     if let Event::Key(key) = event::read()? {
         if key.kind != KeyEventKind::Press {
@@ -234,11 +252,13 @@ fn handle_key_event(app: &mut App, terminal: &mut DefaultTerminal) -> Result<boo
                 let out = entry_to_template(&entry);
                 fs::write(TEMP_FILE_PATH, out)?;
 
-                std::process::Command::new("sh")
-                    .arg("-c")
-                    .arg("nvim /tmp/temp.txt")
-                    .status()
-                    .expect("Failed to execute nvim");
+                #[cfg(target_os = "windows")]
+                let tmp_path = std::env::var("TEMP").unwrap_or("C:\\Temp".into()) + "\\temp.txt";
+
+                #[cfg(not(target_os = "windows"))]
+                let tmp_path = "/tmp/temp.txt".to_string();
+
+                open_editor(&tmp_path).expect("Failed to execute editor");
                 let updated_entry = parse_template(&entry.id, &app)?;
 
                 app.entries.push(updated_entry);
