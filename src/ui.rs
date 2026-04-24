@@ -22,6 +22,19 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph, Tabs};
 use ratatui::{DefaultTerminal, Frame};
 use std::process::Command;
+use std::sync::OnceLock;
+
+static TEMP_FILE_PATH: OnceLock<String> = OnceLock::new();
+
+fn get_temp_path() -> &'static str {
+    TEMP_FILE_PATH.get_or_init(|| {
+        #[cfg(target_os = "windows")]
+        return std::env::var("TEMP").unwrap_or("C:\\Windows\\Temp".into()) + "\\temp.txt";
+
+        #[cfg(not(target_os = "windows"))]
+        return "/tmp/temp.txt".to_string();
+    })
+}
 
 enum Section {
     None,
@@ -72,7 +85,7 @@ fn entry_to_template(entry: &Entry) -> String {
 }
 
 fn parse_template(entry_id: &str, app: &App) -> Result<Entry> {
-    let contents = fs::read_to_string(TEMP_FILE_PATH)?;
+    let contents = fs::read_to_string(get_temp_path())?;
     let mut section = Section::None;
 
     let mut title = String::new();
@@ -248,6 +261,7 @@ fn handle_key_event(app: &mut App, terminal: &mut DefaultTerminal) -> Result<boo
                 execute!(stdout(), LeaveAlternateScreen, Show)?;
 
                 let out = entry_to_template(&entry);
+                fs::write(get_temp_path(), out)?;
 
                 #[cfg(target_os = "windows")]
                 let tmp_path =
@@ -255,8 +269,6 @@ fn handle_key_event(app: &mut App, terminal: &mut DefaultTerminal) -> Result<boo
 
                 #[cfg(not(target_os = "windows"))]
                 let tmp_path = "/tmp/temp.txt".to_string();
-
-                fs::write(tmp_path, out)?;
 
                 open_editor(&tmp_path).expect("Failed to execute editor");
                 let updated_entry = parse_template(&entry.id, &app)?;
@@ -297,7 +309,7 @@ fn handle_key_event(app: &mut App, terminal: &mut DefaultTerminal) -> Result<boo
                     disable_raw_mode()?;
                     execute!(stdout(), LeaveAlternateScreen, Show)?;
                     let out = entry_to_template(&entry);
-                    fs::write(TEMP_FILE_PATH, out)?;
+                    fs::write(get_temp_path(), out)?;
 
                     std::process::Command::new("sh")
                         .arg("-c")
