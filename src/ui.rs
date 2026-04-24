@@ -253,7 +253,8 @@ fn handle_key_event(app: &mut App, terminal: &mut DefaultTerminal) -> Result<boo
                 fs::write(TEMP_FILE_PATH, out)?;
 
                 #[cfg(target_os = "windows")]
-                let tmp_path = std::env::var("TEMP").unwrap_or("C:\\Temp".into()) + "\\temp.txt";
+                let tmp_path =
+                    std::env::var("TEMP").unwrap_or("C:\\Windows\\Temp".into()) + "\\temp.txt";
 
                 #[cfg(not(target_os = "windows"))]
                 let tmp_path = "/tmp/temp.txt".to_string();
