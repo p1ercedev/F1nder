@@ -6,10 +6,10 @@ use std::{
 };
 use strum::Display;
 
+use crate::ui::get_temp_path;
 use color_eyre::{Result, eyre::eyre};
 use ratatui::widgets::ListState;
 use serde::{Deserialize, Serialize};
-
 mod ui;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -342,6 +342,8 @@ fn main() -> Result<()> {
 
     app.write_entries_to_json()?;
     app.write_chains_to_json()?;
+
+    fs::remove_file(get_temp_path())?;
 
     Ok(())
 }
