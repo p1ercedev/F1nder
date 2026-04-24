@@ -46,6 +46,7 @@ enum Section {
 }
 
 pub fn run_event_loop(terminal: &mut DefaultTerminal, app: &mut App) -> Result<()> {
+    search(app, false);
     loop {
         terminal.draw(|frame| render(frame, app))?;
         if handle_key_event(app, terminal)? {
