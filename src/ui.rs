@@ -26,7 +26,7 @@ use std::sync::OnceLock;
 
 static TEMP_FILE_PATH: OnceLock<String> = OnceLock::new();
 
-fn get_temp_path() -> &'static str {
+pub fn get_temp_path() -> &'static str {
     TEMP_FILE_PATH.get_or_init(|| {
         #[cfg(target_os = "windows")]
         return std::env::var("TEMP").unwrap_or("C:\\Windows\\Temp".into()) + "\\temp.txt";
@@ -117,10 +117,6 @@ fn entry_to_template(entry: &Entry) -> String {
     out.push('\n');
 
     out.push_str("--- COMMANDS ---\n");
-    out.push_str("# One command per block. Blocks separated by \"===\".\n");
-    out.push_str("# Format:\n");
-    out.push_str("# [description]\n");
-    out.push_str("# <command body on one or more lines>\n");
     out.push_str(&entry.cmd);
     out.push('\n');
 
@@ -303,17 +299,10 @@ fn handle_key_event(app: &mut App, terminal: &mut DefaultTerminal) -> Result<boo
                 disable_raw_mode()?;
                 execute!(stdout(), LeaveAlternateScreen, Show)?;
 
-                let out = entry_to_template(&entry);
-                fs::write(get_temp_path(), out)?;
+                // let out = entry_to_template(&entry);
+                // fs::write(get_temp_path(), out)?;
 
-                #[cfg(target_os = "windows")]
-                let tmp_path =
-                    std::env::var("TEMP").unwrap_or("C:\\Windows\\Temp".into()) + "\\temp.txt";
-
-                #[cfg(not(target_os = "windows"))]
-                let tmp_path = "/tmp/temp.txt".to_string();
-
-                open_editor(&tmp_path).expect("Failed to execute editor");
+                open_editor(get_temp_path()).expect("Failed to execute editor");
                 let updated_entry = parse_template(&entry.id, &app)?;
 
                 app.entries.push(updated_entry);
@@ -354,11 +343,8 @@ fn handle_key_event(app: &mut App, terminal: &mut DefaultTerminal) -> Result<boo
                     let out = entry_to_template(&entry);
                     fs::write(get_temp_path(), out)?;
 
-                    std::process::Command::new("sh")
-                        .arg("-c")
-                        .arg("nvim /tmp/temp.txt")
-                        .status()
-                        .expect("Failed to execute nvim");
+                    let _ = open_editor(get_temp_path());
+
                     let updated_entry = parse_template(&entry.id, &app)?;
                     app.entries[selected_index] = updated_entry;
 
