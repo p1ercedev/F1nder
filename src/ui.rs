@@ -194,7 +194,7 @@ fn parse_template(entry_id: &str, app: &App) -> Result<Entry> {
 fn open_editor(path: &str) -> std::io::Result<std::process::ExitStatus> {
     #[cfg(target_os = "windows")]
     {
-        Command::new("nvim").args(path).status()
+        Command::new("nvim").arg(path).status()
     }
 
     #[cfg(not(target_os = "windows"))]
