@@ -502,6 +502,7 @@ dependencies = [
  "nucleo-matcher",
  "rand 0.10.1",
  "ratatui",
+ "regex",
  "serde",
  "serde_json",
  "strum 0.28.0",
