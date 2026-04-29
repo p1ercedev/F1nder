@@ -179,6 +179,7 @@ impl App {
         }
 
         for (filepath, ef) in &entries_by_filename {
+            println!("Writing to {}", filepath.to_string_lossy().as_ref());
             let mut file = OpenOptions::new()
                 .write(true)
                 .create(true)
@@ -285,7 +286,6 @@ impl App {
             .collect()
     }
 }
-
 fn main() -> Result<()> {
     color_eyre::install()?;
 
@@ -342,8 +342,6 @@ fn main() -> Result<()> {
 
     app.write_entries_to_json()?;
     app.write_chains_to_json()?;
-
-    fs::remove_file(get_temp_path())?;
 
     Ok(())
 }

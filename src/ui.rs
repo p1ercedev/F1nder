@@ -1,5 +1,6 @@
 use rand::RngExt;
 use ratatui::widgets::Wrap;
+use regex::Regex;
 use std::ffi::OsStr;
 use std::fs;
 use std::io::stdout;
@@ -112,7 +113,7 @@ fn entry_to_template(entry: &Entry) -> String {
     out.push_str(&entry.description);
     out.push('\n');
 
-    out.push_str("--- SOURCE-FILE (.json) ---\n");
+    out.push_str("--- SOURCE-FILE ---\n");
     out.push_str(&entry.source_file.to_str().unwrap_or_default());
     out.push('\n');
 
@@ -151,7 +152,7 @@ fn parse_template(entry_id: &str, app: &App) -> Result<Entry> {
                 section = Section::Commands;
                 continue;
             }
-            "--- SOURCE-FILE (.json) ---" => {
+            "--- SOURCE-FILE ---" => {
                 section = Section::SourceFile;
                 continue;
             }
@@ -189,19 +190,20 @@ fn parse_template(entry_id: &str, app: &App) -> Result<Entry> {
                 }
 
                 // Extract just the filename, discarding any directory components
-                let filename = Path::new(trimmed)
+                let json_pattern = Regex::new(r"(?i)\.json").unwrap();
+                let cmds_pattern = Regex::new("(?i)-CMDs").unwrap();
+
+                let mut filename = Path::new(trimmed)
                     .file_name()
                     .unwrap_or_else(|| OsStr::new(trimmed))
                     .to_string_lossy()
                     .to_string();
 
-                let filename = if filename.ends_with(".json") {
-                    filename
-                } else if !filename.contains("-cmds") {
-                    format!("{}-cmds.json", filename)
-                } else {
-                    format!("{}.json", filename)
-                };
+                filename = cmds_pattern
+                    .replace_all(&json_pattern.replace_all(&filename, "").to_string(), "")
+                    .to_string();
+
+                filename = format!("{}-CMDs.json", filename);
 
                 // Always anchor under JSONs/cmds/
                 let full_path = app.cmds_dir.join(filename);
@@ -305,6 +307,8 @@ fn handle_key_event(app: &mut App, terminal: &mut DefaultTerminal) -> Result<boo
                 open_editor(get_temp_path()).expect("Failed to execute editor");
                 let updated_entry = parse_template(&entry.id, &app)?;
 
+                // fs::remove_file(get_temp_path())?;
+
                 app.entries.push(updated_entry);
                 app.rebuild_entry_index();
                 search(app, false);
@@ -347,6 +351,8 @@ fn handle_key_event(app: &mut App, terminal: &mut DefaultTerminal) -> Result<boo
 
                     let updated_entry = parse_template(&entry.id, &app)?;
                     app.entries[selected_index] = updated_entry;
+
+                    fs::remove_file(get_temp_path())?;
 
                     // Re-enable raw mode and re-enter alternate screen
                     enable_raw_mode()?;
