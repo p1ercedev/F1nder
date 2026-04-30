@@ -307,7 +307,7 @@ fn handle_key_event(app: &mut App, terminal: &mut DefaultTerminal) -> Result<boo
                 open_editor(get_temp_path()).expect("Failed to execute editor");
                 let updated_entry = parse_template(&entry.id, &app)?;
 
-                // fs::remove_file(get_temp_path())?;
+                fs::remove_file(get_temp_path())?;
 
                 app.entries.push(updated_entry);
                 app.rebuild_entry_index();
@@ -746,7 +746,7 @@ fn render_detail(frame: &mut Frame, area: Rect, app: &App) {
     let top = Paragraph::new(vec![
         Line::from(""),
         Line::from(Span::styled(
-            breadcrumb,
+            entry.title.as_str(),
             Style::default().fg(Color::DarkGray),
         )),
         Line::from(Span::styled(
