@@ -167,12 +167,20 @@ impl App {
             .collect();
     }
 
+    pub fn sanitize_source_path(&self, raw: &PathBuf) -> PathBuf {
+        let filename = raw
+            .file_name()
+            .unwrap_or_else(|| OsStr::new("unknown-CMDs.json"));
+        self.cmds_dir.join(filename)
+    }
+
     pub fn write_entries_to_json(&self) -> Result<()> {
         let mut entries_by_filename: HashMap<PathBuf, EntriesFile> = HashMap::new();
 
         for entry in &self.entries {
+            let safe_path = self.sanitize_source_path(&entry.source_file);
             entries_by_filename
-                .entry(entry.source_file.clone())
+                .entry(safe_path)
                 .or_insert(EntriesFile { entries: vec![] })
                 .entries
                 .push(entry.clone());
@@ -218,11 +226,8 @@ impl App {
             }
             let out_path = match source_entry {
                 Some(entry) => {
-                    let stem = entry
-                        .source_file
-                        .file_stem()
-                        .unwrap_or_default()
-                        .to_string_lossy();
+                    let safe_path = self.sanitize_source_path(&entry.source_file);
+                    let stem = safe_path.file_stem().unwrap_or_default().to_string_lossy();
                     self.chains_dir.join(format!("{}-chains.json", stem))
                 }
                 None => self.chains_dir.join("orphaned-chains.json"),
@@ -317,6 +322,7 @@ fn main() -> Result<()> {
         let text = fs::read_to_string(&path)?;
         let ef: EntriesFile = serde_json::from_str(&text)?;
         for mut e in ef.entries {
+            // Always override source_file with the canonical path we just read from.
             e.source_file = path.clone();
             entries.push(e);
         }
