@@ -25,6 +25,16 @@ use ratatui::{DefaultTerminal, Frame};
 use std::process::Command;
 use std::sync::OnceLock;
 
+const C_BORDER: Color = Color::Rgb(140, 150, 170); // muted blue-gray for borders
+const C_DIM: Color = Color::Rgb(100, 110, 130); // dim text / breadcrumbs
+const C_FG: Color = Color::Rgb(175, 185, 209); // normal foreground
+const C_FG_BRIGHT: Color = Color::Rgb(220, 228, 245); // bright/primary text
+const C_ACCENT: Color = Color::Rgb(92, 196, 255); // cyan accent (tabs, mode badge)
+const C_ACCENT_BG: Color = Color::Rgb(14, 24, 38); // dark bg for accent badge text
+const C_HIGHLIGHT_BG: Color = Color::Rgb(20, 30, 40); // list selection highlight
+const C_TITLE: Color = Color::Rgb(175, 185, 209); // description / title text
+const C_DESC: Color = Color::Rgb(140, 150, 170); // description body text
+
 static TEMP_FILE_PATH: OnceLock<String> = OnceLock::new();
 
 pub fn get_temp_path() -> &'static str {
@@ -493,10 +503,10 @@ pub fn render(frame: &mut Frame, app: &mut App) {
 fn render_top_tabs(frame: &mut Frame, area: Rect, app: &App) {
     let tabs = Tabs::new(vec!["Search", "Methodology"])
         .select(app.top_tab)
-        .style(Style::default().fg(Color::Gray))
+        .style(Style::default().fg(C_DIM))
         .highlight_style(
             Style::default()
-                .fg(Color::Cyan)
+                .fg(C_ACCENT)
                 .add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
         )
         .divider(" ")
@@ -506,14 +516,13 @@ fn render_top_tabs(frame: &mut Frame, area: Rect, app: &App) {
 }
 
 fn render_search_input(frame: &mut Frame, area: Rect, app: &App) {
-    // TODO: FIX ME
     let mode_title = Line::from(vec![
         Span::raw(" "),
         Span::styled(
             format!(" {} ", app.mode.to_string()),
             Style::default()
-                .bg(Color::Cyan)
-                .fg(Color::Black)
+                .bg(C_ACCENT)
+                .fg(C_ACCENT_BG)
                 .add_modifier(Modifier::BOLD),
         ),
         Span::raw(" "),
@@ -522,7 +531,7 @@ fn render_search_input(frame: &mut Frame, area: Rect, app: &App) {
     let mut block = Block::default()
         .title_top(mode_title)
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::DarkGray));
+        .border_style(Style::default().fg(C_BORDER));
 
     if app.is_chain_edit_mode {
         block = block.title_bottom(Line::from("CHAIN_EDIT_MODE").left_aligned());
@@ -533,7 +542,7 @@ fn render_search_input(frame: &mut Frame, area: Rect, app: &App) {
     } else {
         Line::from(vec![
             Span::raw("  "),
-            Span::styled(app.query.as_str(), Style::default().fg(Color::White)),
+            Span::styled(app.query.as_str(), Style::default().fg(C_FG_BRIGHT)),
         ])
     };
 
@@ -635,7 +644,7 @@ fn render_results(frame: &mut Frame, area: Rect, app: &mut App) {
     let block = Block::default()
         .borders(Borders::ALL)
         .title_bottom(format!(" RESULTS  {} entries ", app.entries.len()))
-        .border_style(Style::default().fg(Color::DarkGray));
+        .border_style(Style::default().fg(C_BORDER));
 
     let inner_width = area.width.saturating_sub(2) as usize;
     let cmd_width = inner_width.saturating_sub(4);
@@ -652,7 +661,7 @@ fn render_results(frame: &mut Frame, area: Rect, app: &mut App) {
             for chunk in textwrap::wrap(&breadcrumb, inner_width.max(1)) {
                 lines.push(Line::from(Span::styled(
                     chunk.into_owned(),
-                    Style::default().fg(Color::DarkGray),
+                    Style::default().fg(C_DIM),
                 )));
             }
 
@@ -660,8 +669,8 @@ fn render_results(frame: &mut Frame, area: Rect, app: &mut App) {
             for (idx, chunk) in wrapped.iter().enumerate() {
                 let prefix = if idx == 0 { "  $ " } else { "    " };
                 lines.push(Line::from(vec![
-                    Span::styled(prefix, Style::default().fg(Color::DarkGray)),
-                    Span::styled(chunk.to_string(), Style::default().fg(Color::White)),
+                    Span::styled(prefix, Style::default().fg(C_DIM)),
+                    Span::styled(chunk.to_string(), Style::default().fg(C_FG_BRIGHT)),
                 ]));
             }
 
@@ -673,7 +682,7 @@ fn render_results(frame: &mut Frame, area: Rect, app: &mut App) {
 
     let list = List::new(items).block(block).highlight_style(
         Style::default()
-            .bg(Color::Rgb(20, 30, 40))
+            .bg(C_HIGHLIGHT_BG)
             .add_modifier(Modifier::BOLD),
     );
     frame.render_stateful_widget(list, area, &mut app.list_state);
@@ -681,11 +690,12 @@ fn render_results(frame: &mut Frame, area: Rect, app: &mut App) {
 fn render_chain(frame: &mut Frame, area: Rect, chain_entries: &[&Entry], selected_entry_id: &str) {
     if chain_entries.is_empty() {
         let p = Paragraph::new("No chain for this command")
-            .style(Style::default().fg(Color::DarkGray))
+            .style(Style::default().fg(C_DIM))
             .alignment(Alignment::Center)
             .block(
                 Block::default()
                     .borders(Borders::ALL)
+                    .border_style(Style::default().fg(C_BORDER))
                     .title(" ATTACK CHAIN ")
                     .title_alignment(Alignment::Center),
             );
@@ -699,10 +709,10 @@ fn render_chain(frame: &mut Frame, area: Rect, chain_entries: &[&Entry], selecte
         .flat_map(|chain_entry| {
             let style = if selected_entry_id == chain_entry.id {
                 Style::default()
-                    .fg(Color::White)
+                    .fg(C_FG_BRIGHT)
                     .add_modifier(Modifier::BOLD)
             } else {
-                Style::default().fg(Color::DarkGray)
+                Style::default().fg(C_DIM)
             };
             vec![
                 Line::from(""),
@@ -717,7 +727,7 @@ fn render_chain(frame: &mut Frame, area: Rect, chain_entries: &[&Entry], selecte
             .borders(Borders::ALL)
             .title_top(" ATTACK CHAIN ")
             .title_alignment(Alignment::Center)
-            .border_style(Style::default().fg(Color::DarkGray)),
+            .border_style(Style::default().fg(C_BORDER)),
     );
 
     frame.render_widget(chain_widget, area);
@@ -728,11 +738,12 @@ fn render_detail(frame: &mut Frame, area: Rect, app: &App) {
 
     let Some(entry) = selected else {
         let p = Paragraph::new(vec![Line::from(""), Line::from("Select an entry")])
-            .style(Style::default().fg(Color::DarkGray))
+            .style(Style::default().fg(C_DIM))
             .alignment(Alignment::Center)
             .block(
                 Block::default()
                     .borders(Borders::ALL)
+                    .border_style(Style::default().fg(C_BORDER))
                     .title(" DESCRIPTION ")
                     .title_alignment(Alignment::Center),
             );
@@ -747,11 +758,11 @@ fn render_detail(frame: &mut Frame, area: Rect, app: &App) {
         Line::from(""),
         Line::from(Span::styled(
             entry.title.as_str(),
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(C_TITLE),
         )),
         Line::from(Span::styled(
             entry.description.as_str(),
-            Style::default().fg(Color::Gray),
+            Style::default().fg(C_DESC),
         )),
         Line::from(""),
     ])
@@ -759,7 +770,7 @@ fn render_detail(frame: &mut Frame, area: Rect, app: &App) {
     .block(
         Block::default()
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::DarkGray))
+            .border_style(Style::default().fg(C_BORDER))
             .title(" DESCRIPTION ")
             .title_alignment(Alignment::Center),
     );

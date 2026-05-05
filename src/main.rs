@@ -187,7 +187,7 @@ impl App {
         }
 
         for (filepath, ef) in &entries_by_filename {
-            println!("Writing to {}", filepath.to_string_lossy().as_ref());
+            // println!("Writing to {}", filepath.to_string_lossy().as_ref());
             let mut file = OpenOptions::new()
                 .write(true)
                 .create(true)
