@@ -130,7 +130,7 @@ impl App {
         Self {
             entries,
             query: String::new(),
-            mode: SearchMode::CMD,
+            mode: SearchMode::ALL,
             top_tab: 0,
             list_state,
             results: vec![],
