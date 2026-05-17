@@ -601,32 +601,67 @@ fn search(app: &mut App, reset_selection: bool) {
     let mut scored: Vec<(usize, u32)> = Vec::new();
 
     for (i, entry) in app.entries.iter().enumerate() {
-        let mut buf = Vec::new();
-        let temp_string: String;
-
-        let haystack = match app.mode {
-            SearchMode::CMD => nucleo::Utf32Str::new(&entry.cmd.as_str(), &mut buf),
-            SearchMode::TITLE => nucleo::Utf32Str::new(&entry.title.as_str(), &mut buf),
+        match app.mode {
+            SearchMode::CMD => {
+                let mut buf = Vec::new();
+                let haystack = nucleo::Utf32Str::new(entry.cmd.as_str(), &mut buf);
+                if let Some(score) = pattern.score(haystack, &mut matcher) {
+                    scored.push((i, score));
+                }
+            }
+            SearchMode::TITLE => {
+                let mut buf = Vec::new();
+                let haystack = nucleo::Utf32Str::new(entry.title.as_str(), &mut buf);
+                if let Some(score) = pattern.score(haystack, &mut matcher) {
+                    scored.push((i, score));
+                }
+            }
             SearchMode::HEADING => {
-                temp_string = entry.heading_path.join(">");
-                nucleo::Utf32Str::new(&temp_string, &mut buf)
+                let mut buf = Vec::new();
+                let temp_string = entry.heading_path.join(" > ");
+                let haystack = nucleo::Utf32Str::new(&temp_string, &mut buf);
+                if let Some(score) = pattern.score(haystack, &mut matcher) {
+                    scored.push((i, score));
+                }
             }
-
             SearchMode::ALL => {
-                temp_string = format!(
-                    "{} {} {}",
-                    entry.cmd,
-                    entry.title,
-                    entry.heading_path.join(" ")
-                );
-                nucleo::Utf32Str::new(&temp_string, &mut buf)
+                // Score each field independently, then combine with weights.
+                // Heading match is strongest signal (you're looking for a category),
+                // title next (technique + tool + OS keywords), cmd last.
+                let mut h_buf = Vec::new();
+                let heading_str = entry.heading_path.join(" > ");
+                let h_hay = nucleo::Utf32Str::new(&heading_str, &mut h_buf);
+                let h_score = pattern.score(h_hay, &mut matcher).unwrap_or(0);
+
+                let mut t_buf = Vec::new();
+                let t_hay = nucleo::Utf32Str::new(entry.title.as_str(), &mut t_buf);
+                let t_score = pattern.score(t_hay, &mut matcher).unwrap_or(0);
+
+                let mut c_buf = Vec::new();
+                let c_hay = nucleo::Utf32Str::new(entry.cmd.as_str(), &mut c_buf);
+                let c_score = pattern.score(c_hay, &mut matcher).unwrap_or(0);
+
+                let combined = (h_score.saturating_mul(3))
+                    .saturating_add(t_score.saturating_mul(2))
+                    .saturating_add(c_score);
+
+                if combined > 0 {
+                    scored.push((i, combined));
+                }
             }
-        };
-        if let Some(score) = pattern.score(haystack, &mut matcher) {
-            scored.push((i, score));
         }
     }
+
     scored.sort_by(|a, b| b.1.cmp(&a.1));
+
+    // Drop results scoring below 40% of the top hit — kills the fuzzy noise
+    if let Some(&(_, top_score)) = scored.first() {
+        if top_score > 0 {
+            let threshold = top_score * 2 / 5;
+            scored.retain(|&(_, s)| s >= threshold);
+        }
+    }
+
     app.results = scored.into_iter().map(|(i, _)| i).collect();
 
     if app.results.is_empty() {
