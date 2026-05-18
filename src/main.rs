@@ -6,7 +6,6 @@ use std::{
 };
 use strum::Display;
 
-use crate::ui::get_temp_path;
 use color_eyre::{Result, eyre::eyre};
 use ratatui::widgets::ListState;
 use serde::{Deserialize, Serialize};
