@@ -27,7 +27,6 @@ use std::sync::OnceLock;
 
 const C_BORDER: Color = Color::Rgb(140, 150, 170); // muted blue-gray for borders
 const C_DIM: Color = Color::Rgb(100, 110, 130); // dim text / breadcrumbs
-const C_FG: Color = Color::Rgb(175, 185, 209); // normal foreground
 const C_FG_BRIGHT: Color = Color::Rgb(220, 228, 245); // bright/primary text
 const C_ACCENT: Color = Color::Rgb(92, 196, 255); // cyan accent (tabs, mode badge)
 const C_ACCENT_BG: Color = Color::Rgb(14, 24, 38); // dark bg for accent badge text
@@ -561,7 +560,7 @@ fn render_main(frame: &mut Frame, area: Rect, app: &mut App) {
 
     render_results(frame, cols[0], app);
 
-    let right_rows = Layout::vertical([Constraint::Length(6), Constraint::Min(0)]).split(cols[1]);
+    let right_rows = Layout::vertical([Constraint::Percentage(60), Constraint::Min(0)]).split(cols[1]);
 
     render_detail(frame, right_rows[0], app);
 
@@ -787,20 +786,21 @@ fn render_detail(frame: &mut Frame, area: Rect, app: &App) {
         return;
     };
 
-    // Top card: breadcrumb + title + primary command
-    let breadcrumb = entry.heading_path.join(" › ");
-    let top = Paragraph::new(vec![
-        Line::from(""),
-        Line::from(Span::styled(
-            entry.title.as_str(),
-            Style::default().fg(C_TITLE),
-        )),
-        Line::from(Span::styled(
-            entry.description.as_str(),
+    let lines_iter = entry.description.lines().map(|l|  Line::from(Span::styled(
+            l,
             Style::default().fg(C_DESC),
-        )),
+        )));
+
+    let mut lines = vec![
         Line::from(""),
-    ])
+        Line::from(Span::styled(entry.title.as_str(), Style::default().fg(C_TITLE))),
+    ];
+
+    lines.extend(lines_iter);
+
+    // Top card: breadcrumb + title + primary command
+    // let breadcrumb = entry.heading_path.join(" › ");
+    let top = Paragraph::new(lines)
     .wrap(Wrap { trim: false })
     .block(
         Block::default()
