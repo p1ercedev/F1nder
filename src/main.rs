@@ -1,8 +1,9 @@
 use std::{
     collections::{HashMap, HashSet},
+    error::Error,
     ffi::OsStr,
     fs::{self, OpenOptions},
-    path::PathBuf,
+    path::{Path, PathBuf},
 };
 use strum::Display;
 
@@ -33,7 +34,32 @@ impl Entry {
         }
     }
 }
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EntriesFile {
+    pub entries: Vec<Entry>,
+}
+impl Default for Entry {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct EntryRecord {
+    id: String,
+    title: String,
+    cmd: String,
+    description: String,
+    source_file: PathBuf,
+    heading_path: String, // semicolon-delimited for CSV
+}
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct ChainRecord {
+    id: String,
+    name: String,
+    description: String,
+    steps: String, // semicolon-delimited entry IDs for CSV
+}
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Chain {
     pub id: String,
@@ -58,7 +84,7 @@ where
     std::result::Result::Ok(steps.into_iter().map(|s| s.entry_id).collect())
 }
 
-fn serialize_steps<S>(steps: &Vec<String>, serializer: S) -> std::result::Result<S::Ok, S::Error>
+fn serialize_steps<S>(steps: &[String], serializer: S) -> std::result::Result<S::Ok, S::Error>
 where
     S: serde::Serializer,
 {
@@ -80,11 +106,6 @@ pub struct ChainsFile {
     pub chains: Vec<Chain>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct EntriesFile {
-    pub entries: Vec<Entry>,
-}
-
 #[derive(Debug, Display)]
 pub enum SearchMode {
     CMD,
@@ -93,6 +114,172 @@ pub enum SearchMode {
     ALL,
 }
 
+fn array_to_field(arr: &[String]) -> String {
+    arr.iter()
+        .map(|s| to_csv_field(s)) // escape newlines etc. for EACH element before joining
+        .collect::<Vec<_>>()
+        .join(";")
+}
+fn field_to_array(s: &str) -> Vec<String> {
+    s.split(';')
+        .map(from_csv_field) // unescape after splitting to get original strings back, including any semicolons that were escaped
+        .collect()
+}
+fn to_csv_field(s: &str) -> String {
+    s.replace('\\', "\\\\") // escape backslashes FIRST or you'll double-escape
+        .replace('\n', "\\n")
+        .replace('\r', "\\r")
+}
+
+fn from_csv_field(s: &str) -> String {
+    s.replace("\\n", "\n")
+        .replace("\\r", "\r")
+        .replace("\\\\", "\\") // unescape backslashes LAST pleaseeee
+}
+pub fn json_to_csv(path: &Path) -> Result<(), Box<dyn Error>> {
+    let text = std::fs::read_to_string(path)?;
+    let entries_file: EntriesFile = serde_json::from_str(&text)?;
+    let records: Vec<EntryRecord> = entries_file
+        .entries
+        .into_iter()
+        .map(|e| EntryRecord {
+            id: e.id,
+            title: e.title,
+            cmd: to_csv_field(&e.cmd),
+            description: to_csv_field(&e.description),
+            source_file: e.source_file,
+            heading_path: array_to_field(&e.heading_path),
+        })
+        .collect();
+    let output_path = path.with_extension("csv");
+    let mut wtr = csv::Writer::from_path(output_path)?;
+    for record in records {
+        wtr.serialize(record)?;
+    }
+    wtr.flush()?;
+    Ok(())
+}
+
+pub fn csv_to_json(path: &Path) -> Result<(), Box<dyn Error>> {
+    let mut rdr = csv::Reader::from_path(path)?;
+    let mut entries: Vec<Entry> = Vec::new();
+    for result in rdr.deserialize() {
+        let mut record: EntryRecord = result?;
+        record.cmd = from_csv_field(&record.cmd);
+        record.description = from_csv_field(&record.description);
+        let entry = Entry {
+            id: record.id,
+            title: record.title,
+            cmd: record.cmd,
+            description: record.description,
+            source_file: record.source_file,
+            heading_path: field_to_array(&record.heading_path),
+        };
+        entries.push(entry);
+    }
+    let entries_file = EntriesFile { entries };
+    let json_data = serde_json::to_string_pretty(&entries_file)?;
+    let output_path = path.with_extension("json");
+    std::fs::write(output_path, json_data)?;
+    Ok(())
+}
+fn chain_json_to_csv(path: &Path) -> Result<(), Box<dyn Error>> {
+    // Parse ChainsFile, map each Chain → ChainRecord (steps via array_to_field)
+    let json_data = std::fs::read_to_string(path)?;
+    let chains_file: ChainsFile = serde_json::from_str(&json_data)?;
+    let records: Vec<ChainRecord> = chains_file
+        .chains
+        .into_iter()
+        .map(|chain| ChainRecord {
+            id: chain.id,
+            name: chain.name,
+            description: to_csv_field(&chain.description),
+            steps: array_to_field(&chain.steps),
+        })
+        .collect();
+    // Write CSV
+    let output_path = path.with_extension("csv");
+    let mut wtr = csv::Writer::from_path(output_path)?;
+    for record in records {
+        wtr.serialize(record)?;
+    }
+    wtr.flush()?;
+    Ok(())
+}
+
+fn chain_csv_to_json(path: &Path) -> Result<(), Box<dyn Error>> {
+    // Read CSV into ChainRecord -> map back to Chain with deserialization of steps field via field_to_array
+    let mut rdr = csv::Reader::from_path(path)?;
+    let mut chains: Vec<Chain> = Vec::new();
+    for result in rdr.deserialize() {
+        let record: ChainRecord = result?;
+        let chain = Chain {
+            id: record.id,
+            name: record.name,
+            description: from_csv_field(&record.description),
+            steps: field_to_array(&record.steps),
+        };
+        chains.push(chain);
+    }
+    let chains_file = ChainsFile { chains };
+    let json_data = serde_json::to_string_pretty(&chains_file)?;
+    let output_path = path.with_extension("json");
+    // Write JSON
+    std::fs::write(output_path, json_data)?;
+    Ok(())
+}
+
+fn ensure_cmd_files(dir: &Path) -> Result<Vec<PathBuf>> {
+    let mut json_paths: HashSet<PathBuf> = HashSet::new();
+
+    for dir_entry in fs::read_dir(dir)? {
+        let path = dir_entry?.path();
+        match path.extension().and_then(|e| e.to_str()) {
+            Some("json") => {
+                if !path.with_extension("csv").exists() {
+                    json_to_csv(&path).map_err(|e| eyre!("{e}"))?;
+                }
+                json_paths.insert(path);
+            }
+            Some("csv") => {
+                let json_path = path.with_extension("json");
+                if !json_path.exists() {
+                    csv_to_json(&path).map_err(|e| eyre!("{e}"))?;
+                }
+                json_paths.insert(json_path);
+            }
+            _ => continue,
+        }
+    }
+
+    Ok(json_paths.into_iter().collect())
+}
+
+fn ensure_chain_files(dir: &Path) -> Result<Vec<PathBuf>> {
+    let mut json_paths: HashSet<PathBuf> = HashSet::new();
+
+    for dir_entry in fs::read_dir(dir)? {
+        let path = dir_entry?.path();
+        match path.extension().and_then(|e| e.to_str()) {
+            Some("json") => {
+                if !path.with_extension("csv").exists() {
+                    chain_json_to_csv(&path).map_err(|e| eyre!("{e}"))?;
+                }
+                json_paths.insert(path);
+            }
+            Some("csv") => {
+                let json_path = path.with_extension("json");
+                if !json_path.exists() {
+                    chain_csv_to_json(&path).map_err(|e| eyre!("{e}"))?;
+                }
+                json_paths.insert(json_path);
+            }
+            _ => continue,
+        }
+    }
+
+    Ok(json_paths.into_iter().collect())
+}
 pub struct App {
     pub top_tab: usize,
     pub entries: Vec<Entry>,
@@ -166,7 +353,7 @@ impl App {
             .collect();
     }
 
-    pub fn sanitize_source_path(&self, raw: &PathBuf) -> PathBuf {
+    pub fn sanitize_source_path(&self, raw: &Path) -> PathBuf {
         let filename = raw
             .file_name()
             .unwrap_or_else(|| OsStr::new("unknown-CMDs.json"));
@@ -216,11 +403,11 @@ impl App {
         for chain in &self.chains {
             let mut source_entry: Option<&Entry> = None;
             for entry_id in &chain.steps {
-                if let Some(&index) = self.entry_index.get(entry_id) {
-                    if let Some(entry) = self.entries.get(index) {
-                        source_entry = Some(entry);
-                        break;
-                    }
+                if let Some(&index) = self.entry_index.get(entry_id)
+                    && let Some(entry) = self.entries.get(index)
+                {
+                    source_entry = Some(entry);
+                    break;
                 }
             }
             let out_path = match source_entry {
@@ -313,27 +500,18 @@ fn main() -> Result<()> {
     }
 
     let mut entries: Vec<Entry> = Vec::new();
-    for dir_entry in fs::read_dir(&cmds_dir)? {
-        let path = dir_entry?.path();
-        if path.extension() != Some(OsStr::new("json")) {
-            continue;
-        }
-        let text = fs::read_to_string(&path)?;
+    for json_path in ensure_cmd_files(&cmds_dir)? {
+        let text = fs::read_to_string(&json_path)?;
         let ef: EntriesFile = serde_json::from_str(&text)?;
         for mut e in ef.entries {
-            // Always override source_file with the canonical path we just read from.
-            e.source_file = path.clone();
+            e.source_file = json_path.clone();
             entries.push(e);
         }
     }
 
     let mut chains: Vec<Chain> = Vec::new();
-    for dir_entry in fs::read_dir(&chains_dir)? {
-        let path = dir_entry?.path();
-        if path.extension() != Some(OsStr::new("json")) {
-            continue;
-        }
-        let text = fs::read_to_string(&path)?;
+    for json_path in ensure_chain_files(&chains_dir)? {
+        let text = fs::read_to_string(&json_path)?;
         let cf: ChainsFile = serde_json::from_str(&text)?;
         chains.extend(cf.chains);
     }
