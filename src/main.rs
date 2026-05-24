@@ -49,6 +49,7 @@ struct EntryRecord {
     title: String,
     cmd: String,
     description: String,
+    #[serde(skip)] // not really necessary in the csv
     source_file: PathBuf,
     heading_path: String, // semicolon-delimited for CSV
 }
