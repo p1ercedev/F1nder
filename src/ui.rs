@@ -123,7 +123,7 @@ fn entry_to_template(entry: &Entry) -> String {
     out.push('\n');
 
     out.push_str("--- SOURCE-FILE ---\n");
-    out.push_str(&entry.source_file.to_str().unwrap_or_default());
+    out.push_str(entry.source_file.to_str().unwrap_or_default());
     out.push('\n');
 
     out.push_str("--- COMMANDS ---\n");
@@ -142,6 +142,9 @@ fn parse_template(entry_id: &str, app: &App) -> Result<Entry> {
     let mut description = String::new();
     let mut cmd = String::new();
     let mut source_file = String::new();
+
+    let json_pattern = Regex::new(r"(?i)\.json").unwrap();
+    let cmds_pattern = Regex::new("(?i)-CMDs").unwrap();
 
     for line in contents.lines() {
         match line.trim() {
@@ -199,9 +202,6 @@ fn parse_template(entry_id: &str, app: &App) -> Result<Entry> {
                 }
 
                 // Extract just the filename, discarding any directory components
-                let json_pattern = Regex::new(r"(?i)\.json").unwrap();
-                let cmds_pattern = Regex::new("(?i)-CMDs").unwrap();
-
                 let mut filename = Path::new(trimmed)
                     .file_name()
                     .unwrap_or_else(|| OsStr::new(trimmed))
@@ -209,7 +209,7 @@ fn parse_template(entry_id: &str, app: &App) -> Result<Entry> {
                     .to_string();
 
                 filename = cmds_pattern
-                    .replace_all(&json_pattern.replace_all(&filename, "").to_string(), "")
+                    .replace_all(&json_pattern.replace_all(&filename, ""), "")
                     .to_string();
 
                 filename = format!("{}-CMDs.json", filename);
@@ -315,7 +315,7 @@ fn handle_key_event(app: &mut App, terminal: &mut DefaultTerminal) -> Result<boo
                 fs::write(get_temp_path(), out)?;
 
                 open_editor(get_temp_path()).expect("Failed to execute editor");
-                let updated_entry = parse_template(&entry.id, &app)?;
+                let updated_entry = parse_template(&entry.id, app)?;
 
                 fs::remove_file(get_temp_path())?;
 
@@ -335,10 +335,10 @@ fn handle_key_event(app: &mut App, terminal: &mut DefaultTerminal) -> Result<boo
                 terminal.clear()?;
             }
             KeyCode::Char('n') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                if !app.is_chain_edit_mode {
-                    if let Some(entry) = app.selected_entry() {
-                        app.prev_selected_entry_id = entry.id.clone();
-                    }
+                if !app.is_chain_edit_mode
+                    && let Some(entry) = app.selected_entry()
+                {
+                    app.prev_selected_entry_id = entry.id.clone();
                 }
                 app.is_chain_edit_mode = !app.is_chain_edit_mode;
                 app.query.clear();
@@ -354,12 +354,12 @@ fn handle_key_event(app: &mut App, terminal: &mut DefaultTerminal) -> Result<boo
                     // Disable raw mode and leave alternate screen
                     disable_raw_mode()?;
                     execute!(stdout(), LeaveAlternateScreen, Show)?;
-                    let out = entry_to_template(&entry);
+                    let out = entry_to_template(entry);
                     fs::write(get_temp_path(), out)?;
 
                     let _ = open_editor(get_temp_path());
 
-                    let updated_entry = parse_template(&entry.id, &app)?;
+                    let updated_entry = parse_template(&entry.id, app)?;
                     app.entries[selected_index] = updated_entry;
 
                     fs::remove_file(get_temp_path())?;
@@ -459,17 +459,13 @@ fn handle_key_event(app: &mut App, terminal: &mut DefaultTerminal) -> Result<boo
             KeyCode::Left => {
                 app.cursor_index = app.cursor_index.saturating_sub(1);
             }
-            KeyCode::Right => {
-                if app.cursor_index < app.query.len() {
-                    app.cursor_index += 1;
-                }
+            KeyCode::Right if app.cursor_index < app.query.len() => {
+                app.cursor_index += 1;
             }
-            KeyCode::Backspace => {
-                if app.cursor_index > 0 {
-                    app.cursor_index -= 1;
-                    app.query.remove(app.cursor_index);
-                    search(app, true);
-                }
+            KeyCode::Backspace if app.cursor_index > 0 => {
+                app.cursor_index -= 1;
+                app.query.remove(app.cursor_index);
+                search(app, true);
             }
             KeyCode::Char(c)
                 if !key.modifiers.contains(KeyModifiers::CONTROL)
@@ -520,7 +516,7 @@ fn render_search_input(frame: &mut Frame, area: Rect, app: &App) {
     let mode_title = Line::from(vec![
         Span::raw(" "),
         Span::styled(
-            format!(" {} ", app.mode.to_string()),
+            format!(" {} ", app.mode),
             Style::default()
                 .bg(C_ACCENT)
                 .fg(C_ACCENT_BG)
@@ -562,7 +558,8 @@ fn render_main(frame: &mut Frame, area: Rect, app: &mut App) {
 
     render_results(frame, cols[0], app);
 
-    let right_rows = Layout::vertical([Constraint::Percentage(60), Constraint::Min(0)]).split(cols[1]);
+    let right_rows =
+        Layout::vertical([Constraint::Percentage(60), Constraint::Min(0)]).split(cols[1]);
 
     render_detail(frame, right_rows[0], app);
 
@@ -653,14 +650,14 @@ fn search(app: &mut App, reset_selection: bool) {
         }
     }
 
-    scored.sort_by(|a, b| b.1.cmp(&a.1));
+    scored.sort_by_key(|b| std::cmp::Reverse(b.1));
 
     // Drop results scoring below 40% of the top hit — kills the fuzzy noise
-    if let Some(&(_, top_score)) = scored.first() {
-        if top_score > 0 {
-            let threshold = top_score * 2 / 5;
-            scored.retain(|&(_, s)| s >= threshold);
-        }
+    if let Some(&(_, top_score)) = scored.first()
+        && top_score > 0
+    {
+        let threshold = top_score * 2 / 5;
+        scored.retain(|&(_, s)| s >= threshold);
     }
 
     app.results = scored.into_iter().map(|(i, _)| i).collect();
@@ -788,23 +785,24 @@ fn render_detail(frame: &mut Frame, area: Rect, app: &App) {
         return;
     };
 
-    let lines_iter = entry.description.lines().map(|l|  Line::from(Span::styled(
-            l,
-            Style::default().fg(C_DESC),
-        )));
+    let lines_iter = entry
+        .description
+        .lines()
+        .map(|l| Line::from(Span::styled(l, Style::default().fg(C_DESC))));
 
     let mut lines = vec![
         Line::from(""),
-        Line::from(Span::styled(entry.title.as_str(), Style::default().fg(C_TITLE))),
+        Line::from(Span::styled(
+            entry.title.as_str(),
+            Style::default().fg(C_TITLE),
+        )),
     ];
 
     lines.extend(lines_iter);
 
     // Top card: breadcrumb + title + primary command
     // let breadcrumb = entry.heading_path.join(" › ");
-    let top = Paragraph::new(lines)
-    .wrap(Wrap { trim: false })
-    .block(
+    let top = Paragraph::new(lines).wrap(Wrap { trim: false }).block(
         Block::default()
             .borders(Borders::ALL)
             .border_style(Style::default().fg(C_BORDER))
