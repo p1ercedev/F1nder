@@ -310,8 +310,9 @@ fn handle_key_event(app: &mut App, terminal: &mut DefaultTerminal) -> Result<boo
                 disable_raw_mode()?;
                 execute!(stdout(), LeaveAlternateScreen, Show)?;
 
-                // let out = entry_to_template(&entry);
-                // fs::write(get_temp_path(), out)?;
+                // Toggle for prefilled template
+                let out = entry_to_template(&entry);
+                fs::write(get_temp_path(), out)?;
 
                 open_editor(get_temp_path()).expect("Failed to execute editor");
                 let updated_entry = parse_template(&entry.id, &app)?;
@@ -428,6 +429,7 @@ fn handle_key_event(app: &mut App, terminal: &mut DefaultTerminal) -> Result<boo
             }
             KeyCode::Char(']') => {
                 app.top_tab = (app.top_tab + 1) % 2;
+                // Render new UI
             }
 
             KeyCode::Down => {
