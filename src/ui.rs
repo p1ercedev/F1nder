@@ -36,6 +36,14 @@ const C_DESC: Color = Color::Rgb(140, 150, 170); // description body text
 
 static TEMP_FILE_PATH: OnceLock<String> = OnceLock::new();
 
+fn atoms_present(query: &str, haystacks: &[&str]) -> bool {
+    let lowered: Vec<String> = haystacks.iter().map(|h| h.to_lowercase()).collect();
+    query.split_whitespace().all(|atom| {
+        let a = atom.to_lowercase();
+        lowered.iter().any(|h| h.contains(&a))
+    })
+}
+
 pub fn get_temp_path() -> &'static str {
     TEMP_FILE_PATH.get_or_init(|| {
         #[cfg(target_os = "windows")]
@@ -590,20 +598,24 @@ fn render_main(frame: &mut Frame, area: Rect, app: &mut App) {
 fn search(app: &mut App, reset_selection: bool) {
     app.current_chain_index = 0;
     let previous_selection = app.list_state.selected();
-
+ 
     if app.query.trim().is_empty() {
         app.results = (0..app.entries.len()).collect();
         return;
     }
-
+ 
     let mut matcher = nucleo::Matcher::new(Config::DEFAULT);
     let pattern = Pattern::parse(&app.query, CaseMatching::Ignore, Normalization::Smart);
-
+ 
     let mut scored: Vec<(usize, u32)> = Vec::new();
-
+ 
     for (i, entry) in app.entries.iter().enumerate() {
         match app.mode {
             SearchMode::CMD => {
+                // every atom must be a literal substring of the command.
+                if !atoms_present(&app.query, &[entry.cmd.as_str()]) {
+                    continue;
+                }
                 let mut buf = Vec::new();
                 let haystack = nucleo::Utf32Str::new(entry.cmd.as_str(), &mut buf);
                 if let Some(score) = pattern.score(haystack, &mut matcher) {
@@ -611,6 +623,9 @@ fn search(app: &mut App, reset_selection: bool) {
                 }
             }
             SearchMode::TITLE => {
+                if !atoms_present(&app.query, &[entry.title.as_str()]) {
+                    continue;
+                }
                 let mut buf = Vec::new();
                 let haystack = nucleo::Utf32Str::new(entry.title.as_str(), &mut buf);
                 if let Some(score) = pattern.score(haystack, &mut matcher) {
@@ -618,43 +633,48 @@ fn search(app: &mut App, reset_selection: bool) {
                 }
             }
             SearchMode::HEADING => {
-                let mut buf = Vec::new();
                 let temp_string = entry.heading_path.join(" > ");
+                if !atoms_present(&app.query, &[temp_string.as_str()]) {
+                    continue;
+                }
+                let mut buf = Vec::new();
                 let haystack = nucleo::Utf32Str::new(&temp_string, &mut buf);
                 if let Some(score) = pattern.score(haystack, &mut matcher) {
                     scored.push((i, score));
                 }
             }
             SearchMode::ALL => {
-                // Score each field independently, then combine with weights.
-                // Heading match is strongest signal (you're looking for a category),
-                // title next (technique + tool + OS keywords), cmd last.
-                let mut h_buf = Vec::new();
                 let heading_str = entry.heading_path.join(" > ");
+                if !atoms_present(
+                    &app.query,
+                    &[heading_str.as_str(), entry.title.as_str(), entry.cmd.as_str()],
+                ) {
+                    continue;
+                }
+ 
+                let mut h_buf = Vec::new();
                 let h_hay = nucleo::Utf32Str::new(&heading_str, &mut h_buf);
                 let h_score = pattern.score(h_hay, &mut matcher).unwrap_or(0);
-
+ 
                 let mut t_buf = Vec::new();
                 let t_hay = nucleo::Utf32Str::new(entry.title.as_str(), &mut t_buf);
                 let t_score = pattern.score(t_hay, &mut matcher).unwrap_or(0);
-
+ 
                 let mut c_buf = Vec::new();
                 let c_hay = nucleo::Utf32Str::new(entry.cmd.as_str(), &mut c_buf);
                 let c_score = pattern.score(c_hay, &mut matcher).unwrap_or(0);
-
+ 
                 let combined = (h_score.saturating_mul(3))
                     .saturating_add(t_score.saturating_mul(2))
                     .saturating_add(c_score);
-
-                if combined > 0 {
-                    scored.push((i, combined));
-                }
+ 
+                scored.push((i, combined.max(1)));
             }
         }
     }
-
+ 
     scored.sort_by(|a, b| b.1.cmp(&a.1));
-
+ 
     // Drop results scoring below 40% of the top hit — kills the fuzzy noise
     if let Some(&(_, top_score)) = scored.first() {
         if top_score > 0 {
@@ -662,9 +682,9 @@ fn search(app: &mut App, reset_selection: bool) {
             scored.retain(|&(_, s)| s >= threshold);
         }
     }
-
+ 
     app.results = scored.into_iter().map(|(i, _)| i).collect();
-
+ 
     if app.results.is_empty() {
         app.list_state.select(None);
     } else if reset_selection {
