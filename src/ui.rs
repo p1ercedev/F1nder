@@ -283,6 +283,11 @@ fn handle_key_event(app: &mut App, terminal: &mut DefaultTerminal) -> Result<boo
         }
         match key.code {
             KeyCode::Esc => return Ok(true),
+            KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                app.query.clear();
+                app.cursor_index = 0;
+                search(app, true);
+            }
             KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 if let Some(entry_index) = app.selected_entry_index() {
                     let removed_id = app.entries[entry_index].id.clone();
@@ -570,7 +575,8 @@ fn render_main(frame: &mut Frame, area: Rect, app: &mut App) {
 
     render_results(frame, cols[0], app);
 
-    let right_rows = Layout::vertical([Constraint::Percentage(60), Constraint::Min(0)]).split(cols[1]);
+    let right_rows =
+        Layout::vertical([Constraint::Percentage(60), Constraint::Min(0)]).split(cols[1]);
 
     render_detail(frame, right_rows[0], app);
 
@@ -598,17 +604,17 @@ fn render_main(frame: &mut Frame, area: Rect, app: &mut App) {
 fn search(app: &mut App, reset_selection: bool) {
     app.current_chain_index = 0;
     let previous_selection = app.list_state.selected();
- 
+
     if app.query.trim().is_empty() {
         app.results = (0..app.entries.len()).collect();
         return;
     }
- 
+
     let mut matcher = nucleo::Matcher::new(Config::DEFAULT);
     let pattern = Pattern::parse(&app.query, CaseMatching::Ignore, Normalization::Smart);
- 
+
     let mut scored: Vec<(usize, u32)> = Vec::new();
- 
+
     for (i, entry) in app.entries.iter().enumerate() {
         match app.mode {
             SearchMode::CMD => {
@@ -647,34 +653,38 @@ fn search(app: &mut App, reset_selection: bool) {
                 let heading_str = entry.heading_path.join(" > ");
                 if !atoms_present(
                     &app.query,
-                    &[heading_str.as_str(), entry.title.as_str(), entry.cmd.as_str()],
+                    &[
+                        heading_str.as_str(),
+                        entry.title.as_str(),
+                        entry.cmd.as_str(),
+                    ],
                 ) {
                     continue;
                 }
- 
+
                 let mut h_buf = Vec::new();
                 let h_hay = nucleo::Utf32Str::new(&heading_str, &mut h_buf);
                 let h_score = pattern.score(h_hay, &mut matcher).unwrap_or(0);
- 
+
                 let mut t_buf = Vec::new();
                 let t_hay = nucleo::Utf32Str::new(entry.title.as_str(), &mut t_buf);
                 let t_score = pattern.score(t_hay, &mut matcher).unwrap_or(0);
- 
+
                 let mut c_buf = Vec::new();
                 let c_hay = nucleo::Utf32Str::new(entry.cmd.as_str(), &mut c_buf);
                 let c_score = pattern.score(c_hay, &mut matcher).unwrap_or(0);
- 
+
                 let combined = (h_score.saturating_mul(3))
                     .saturating_add(t_score.saturating_mul(2))
                     .saturating_add(c_score);
- 
+
                 scored.push((i, combined.max(1)));
             }
         }
     }
- 
+
     scored.sort_by(|a, b| b.1.cmp(&a.1));
- 
+
     // Drop results scoring below 40% of the top hit — kills the fuzzy noise
     if let Some(&(_, top_score)) = scored.first() {
         if top_score > 0 {
@@ -682,9 +692,9 @@ fn search(app: &mut App, reset_selection: bool) {
             scored.retain(|&(_, s)| s >= threshold);
         }
     }
- 
+
     app.results = scored.into_iter().map(|(i, _)| i).collect();
- 
+
     if app.results.is_empty() {
         app.list_state.select(None);
     } else if reset_selection {
@@ -808,23 +818,24 @@ fn render_detail(frame: &mut Frame, area: Rect, app: &App) {
         return;
     };
 
-    let lines_iter = entry.description.lines().map(|l|  Line::from(Span::styled(
-            l,
-            Style::default().fg(C_DESC),
-        )));
+    let lines_iter = entry
+        .description
+        .lines()
+        .map(|l| Line::from(Span::styled(l, Style::default().fg(C_DESC))));
 
     let mut lines = vec![
         Line::from(""),
-        Line::from(Span::styled(entry.title.as_str(), Style::default().fg(C_TITLE))),
+        Line::from(Span::styled(
+            entry.title.as_str(),
+            Style::default().fg(C_TITLE),
+        )),
     ];
 
     lines.extend(lines_iter);
 
     // Top card: breadcrumb + title + primary command
     // let breadcrumb = entry.heading_path.join(" › ");
-    let top = Paragraph::new(lines)
-    .wrap(Wrap { trim: false })
-    .block(
+    let top = Paragraph::new(lines).wrap(Wrap { trim: false }).block(
         Block::default()
             .borders(Borders::ALL)
             .border_style(Style::default().fg(C_BORDER))

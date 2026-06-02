@@ -3,6 +3,7 @@ use std::{
     ffi::OsStr,
     fs::{self, OpenOptions},
     path::PathBuf,
+    sync::OnceLock,
 };
 use strum::Display;
 
@@ -11,6 +12,17 @@ use ratatui::widgets::ListState;
 use serde::{Deserialize, Serialize};
 mod ui;
 
+static TEMP_FILE_PATH: OnceLock<String> = OnceLock::new();
+
+pub fn get_temp_path() -> &'static str {
+    TEMP_FILE_PATH.get_or_init(|| {
+        #[cfg(target_os = "windows")]
+        return std::env::var("TEMP").unwrap_or("C:\\Windows\\Temp".into()) + "\\prev_search.txt";
+
+        #[cfg(not(target_os = "windows"))]
+        return "/tmp/prev_search.txt".to_string();
+    })
+}
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Entry {
     pub id: String,
@@ -128,12 +140,32 @@ impl App {
             .collect();
         Self {
             entries,
-            query: String::new(),
-            mode: SearchMode::ALL,
+            query: fs::read_to_string(get_temp_path())
+                .unwrap_or(String::new())
+                .lines()
+                .nth(0)
+                .unwrap_or("")
+                .to_owned(),
+            mode: match fs::read_to_string(get_temp_path())
+                .unwrap_or(String::new())
+                .lines()
+                .nth(1)
+                .unwrap_or("ALL")
+            {
+                "CMD" => SearchMode::CMD,
+                "HEADING" => SearchMode::HEADING,
+                "TITLE" => SearchMode::TITLE,
+                _ => SearchMode::ALL,
+            },
             top_tab: 0,
             list_state,
             results: vec![],
-            cursor_index: 0,
+            cursor_index: fs::read_to_string(get_temp_path())
+                .unwrap_or(String::new())
+                .lines()
+                .nth(0)
+                .unwrap_or("")
+                .len(),
             chains,
             entry_index,
             is_chain_edit_mode: false,
@@ -289,7 +321,12 @@ impl App {
             })
             .collect()
     }
+
+    pub fn save_prev_search(&self) {
+        let _ = fs::write(get_temp_path(), format!("{}\n{}", self.query, self.mode));
+    }
 }
+
 fn main() -> Result<()> {
     color_eyre::install()?;
 
@@ -347,6 +384,7 @@ fn main() -> Result<()> {
 
     app.write_entries_to_json()?;
     app.write_chains_to_json()?;
+    app.save_prev_search();
 
     Ok(())
 }
