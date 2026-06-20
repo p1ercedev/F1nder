@@ -1,6 +1,5 @@
 use rand::RngExt;
 use ratatui::widgets::Wrap;
-use regex::Regex;
 use std::ffi::OsStr;
 use std::fs;
 use std::io::stdout;
@@ -34,23 +33,15 @@ const C_HIGHLIGHT_BG: Color = Color::Rgb(20, 30, 40); // list selection highligh
 const C_TITLE: Color = Color::Rgb(175, 185, 209); // description / title text
 const C_DESC: Color = Color::Rgb(140, 150, 170); // description body text
 
-static TEMP_FILE_PATH: OnceLock<String> = OnceLock::new();
+static EDITOR_TEMP_PATH: OnceLock<String> = OnceLock::new();
 
-fn atoms_present(query: &str, haystacks: &[&str]) -> bool {
-    let lowered: Vec<String> = haystacks.iter().map(|h| h.to_lowercase()).collect();
-    query.split_whitespace().all(|atom| {
-        let a = atom.to_lowercase();
-        lowered.iter().any(|h| h.contains(&a))
-    })
-}
-
-pub fn get_temp_path() -> &'static str {
-    TEMP_FILE_PATH.get_or_init(|| {
+pub fn get_editor_temp_path() -> &'static str {
+    EDITOR_TEMP_PATH.get_or_init(|| {
         #[cfg(target_os = "windows")]
         return std::env::var("TEMP").unwrap_or("C:\\Windows\\Temp".into()) + "\\temp.txt";
 
         #[cfg(not(target_os = "windows"))]
-        return "/tmp/temp.txt".to_string();
+        return "/tmp/f1nder_editor_temp.txt".to_string();
     })
 }
 
@@ -73,7 +64,7 @@ pub fn run_event_loop(terminal: &mut DefaultTerminal, app: &mut App) -> Result<(
     }
 }
 
-fn copy_to_clipboard(text: &str) {
+fn copy_to_clipboard(text: &str) -> bool {
     #[cfg(target_os = "windows")]
     {
         use std::io::Write;
@@ -82,8 +73,9 @@ fn copy_to_clipboard(text: &str) {
             if let Some(stdin) = child.stdin.as_mut() {
                 let _ = stdin.write_all(text.as_bytes());
             }
-            let _ = child.wait();
+            return child.wait().map(|s| s.success()).unwrap_or(false);
         }
+        return false;
     }
 
     #[cfg(target_os = "macos")]
@@ -94,24 +86,37 @@ fn copy_to_clipboard(text: &str) {
             if let Some(stdin) = child.stdin.as_mut() {
                 let _ = stdin.write_all(text.as_bytes());
             }
-            let _ = child.wait();
+            return child.wait().map(|s| s.success()).unwrap_or(false);
         }
+        return false;
     }
 
     #[cfg(target_os = "linux")]
     {
         use std::io::Write;
         use std::process::{Command, Stdio};
-        if let Ok(mut child) = Command::new("xsel")
+        // Try xsel first, fall back to xclip
+        let result = Command::new("xsel")
             .args(["--clipboard", "--input"])
             .stdin(Stdio::piped())
-            .spawn()
-        {
-            if let Some(stdin) = child.stdin.as_mut() {
-                let _ = stdin.write_all(text.as_bytes());
-            }
-            let _ = child.wait();
+            .spawn();
+
+        let mut child = match result {
+            Ok(c) => c,
+            Err(_) => match Command::new("xclip")
+                .args(["-selection", "clipboard"])
+                .stdin(Stdio::piped())
+                .spawn()
+            {
+                Ok(c) => c,
+                Err(_) => return false,
+            },
+        };
+
+        if let Some(stdin) = child.stdin.as_mut() {
+            let _ = stdin.write_all(text.as_bytes());
         }
+        return child.wait().map(|s| s.success()).unwrap_or(false);
     }
 }
 
@@ -142,7 +147,7 @@ fn entry_to_template(entry: &Entry) -> String {
 }
 
 fn parse_template(entry_id: &str, app: &App) -> Result<Entry> {
-    let contents = fs::read_to_string(get_temp_path())?;
+    let contents = fs::read_to_string(get_editor_temp_path())?;
     let mut section = Section::None;
 
     let mut title = String::new();
@@ -192,7 +197,7 @@ fn parse_template(entry_id: &str, app: &App) -> Result<Entry> {
             Section::Commands => {
                 if line.trim_start().starts_with('#') {
                     continue;
-                } // Skip comments in template
+                }
                 cmd.push_str(line);
                 cmd.push('\n');
             }
@@ -207,17 +212,18 @@ fn parse_template(entry_id: &str, app: &App) -> Result<Entry> {
                 }
 
                 // Extract just the filename, discarding any directory components
-                let json_pattern = Regex::new(r"(?i)\.json").unwrap();
-                let cmds_pattern = Regex::new("(?i)-CMDs").unwrap();
-
                 let mut filename = Path::new(trimmed)
                     .file_name()
                     .unwrap_or_else(|| OsStr::new(trimmed))
                     .to_string_lossy()
                     .to_string();
 
-                filename = cmds_pattern
-                    .replace_all(&json_pattern.replace_all(&filename, "").to_string(), "")
+                // Strip .json and -CMDs suffixes, then re-add canonical form
+                filename = filename
+                    .trim_end_matches(".json")
+                    .trim_end_matches(".JSON")
+                    .trim_end_matches("-CMDs")
+                    .trim_end_matches("-cmds")
                     .to_string();
 
                 filename = format!("{}-CMDs.json", filename);
@@ -228,7 +234,7 @@ fn parse_template(entry_id: &str, app: &App) -> Result<Entry> {
                 source_file.push_str(full_path.to_string_lossy().as_ref());
                 source_file.push('\n');
             }
-            Section::None => {} // lines before any section marker — ignore
+            Section::None => {}
         }
     }
 
@@ -300,6 +306,7 @@ fn handle_key_event(app: &mut App, terminal: &mut DefaultTerminal) -> Result<boo
                     }
                     app.chains.retain(|c| c.steps.len() >= 2);
 
+                    app.dirty = true;
                     search(app, true);
 
                     if app.results.is_empty() {
@@ -323,17 +330,17 @@ fn handle_key_event(app: &mut App, terminal: &mut DefaultTerminal) -> Result<boo
                 disable_raw_mode()?;
                 execute!(stdout(), LeaveAlternateScreen, Show)?;
 
-                // Toggle for prefilled template
                 let out = entry_to_template(&entry);
-                fs::write(get_temp_path(), out)?;
+                fs::write(get_editor_temp_path(), out)?;
 
-                open_editor(get_temp_path()).expect("Failed to execute editor");
+                open_editor(get_editor_temp_path()).expect("Failed to execute editor");
                 let updated_entry = parse_template(&entry.id, &app)?;
 
-                fs::remove_file(get_temp_path())?;
+                fs::remove_file(get_editor_temp_path())?;
 
                 app.entries.push(updated_entry);
                 app.rebuild_entry_index();
+                app.dirty = true;
                 search(app, false);
 
                 let new_entry_idx = app.entries.len() - 1;
@@ -368,14 +375,15 @@ fn handle_key_event(app: &mut App, terminal: &mut DefaultTerminal) -> Result<boo
                     disable_raw_mode()?;
                     execute!(stdout(), LeaveAlternateScreen, Show)?;
                     let out = entry_to_template(&entry);
-                    fs::write(get_temp_path(), out)?;
+                    fs::write(get_editor_temp_path(), out)?;
 
-                    let _ = open_editor(get_temp_path());
+                    let _ = open_editor(get_editor_temp_path());
 
                     let updated_entry = parse_template(&entry.id, &app)?;
                     app.entries[selected_index] = updated_entry;
+                    app.dirty = true;
 
-                    fs::remove_file(get_temp_path())?;
+                    fs::remove_file(get_editor_temp_path())?;
 
                     // Re-enable raw mode and re-enter alternate screen
                     enable_raw_mode()?;
@@ -405,6 +413,7 @@ fn handle_key_event(app: &mut App, terminal: &mut DefaultTerminal) -> Result<boo
                             description: String::from("new-chain"),
                         });
                     }
+                    app.dirty = true;
                 }
                 app.current_chain_index = 0;
                 app.is_chain_edit_mode = false;
@@ -442,7 +451,6 @@ fn handle_key_event(app: &mut App, terminal: &mut DefaultTerminal) -> Result<boo
             }
             KeyCode::Char(']') => {
                 app.top_tab = (app.top_tab + 1) % 2;
-                // Render new UI
             }
 
             KeyCode::Down => {
@@ -618,10 +626,6 @@ fn search(app: &mut App, reset_selection: bool) {
     for (i, entry) in app.entries.iter().enumerate() {
         match app.mode {
             SearchMode::CMD => {
-                // every atom must be a literal substring of the command.
-                if !atoms_present(&app.query, &[entry.cmd.as_str()]) {
-                    continue;
-                }
                 let mut buf = Vec::new();
                 let haystack = nucleo::Utf32Str::new(entry.cmd.as_str(), &mut buf);
                 if let Some(score) = pattern.score(haystack, &mut matcher) {
@@ -629,9 +633,6 @@ fn search(app: &mut App, reset_selection: bool) {
                 }
             }
             SearchMode::TITLE => {
-                if !atoms_present(&app.query, &[entry.title.as_str()]) {
-                    continue;
-                }
                 let mut buf = Vec::new();
                 let haystack = nucleo::Utf32Str::new(entry.title.as_str(), &mut buf);
                 if let Some(score) = pattern.score(haystack, &mut matcher) {
@@ -640,9 +641,6 @@ fn search(app: &mut App, reset_selection: bool) {
             }
             SearchMode::HEADING => {
                 let temp_string = entry.heading_path.join(" > ");
-                if !atoms_present(&app.query, &[temp_string.as_str()]) {
-                    continue;
-                }
                 let mut buf = Vec::new();
                 let haystack = nucleo::Utf32Str::new(&temp_string, &mut buf);
                 if let Some(score) = pattern.score(haystack, &mut matcher) {
@@ -651,16 +649,6 @@ fn search(app: &mut App, reset_selection: bool) {
             }
             SearchMode::ALL => {
                 let heading_str = entry.heading_path.join(" > ");
-                if !atoms_present(
-                    &app.query,
-                    &[
-                        heading_str.as_str(),
-                        entry.title.as_str(),
-                        entry.cmd.as_str(),
-                    ],
-                ) {
-                    continue;
-                }
 
                 let mut h_buf = Vec::new();
                 let h_hay = nucleo::Utf32Str::new(&heading_str, &mut h_buf);
@@ -678,20 +666,14 @@ fn search(app: &mut App, reset_selection: bool) {
                     .saturating_add(t_score.saturating_mul(2))
                     .saturating_add(c_score);
 
-                scored.push((i, combined.max(1)));
+                if combined > 0 {
+                    scored.push((i, combined));
+                }
             }
         }
     }
 
     scored.sort_by(|a, b| b.1.cmp(&a.1));
-
-    // Drop results scoring below 40% of the top hit — kills the fuzzy noise
-    if let Some(&(_, top_score)) = scored.first() {
-        if top_score > 0 {
-            let threshold = top_score * 2 / 5;
-            scored.retain(|&(_, s)| s >= threshold);
-        }
-    }
 
     app.results = scored.into_iter().map(|(i, _)| i).collect();
 
@@ -833,8 +815,6 @@ fn render_detail(frame: &mut Frame, area: Rect, app: &App) {
 
     lines.extend(lines_iter);
 
-    // Top card: breadcrumb + title + primary command
-    // let breadcrumb = entry.heading_path.join(" › ");
     let top = Paragraph::new(lines).wrap(Wrap { trim: false }).block(
         Block::default()
             .borders(Borders::ALL)

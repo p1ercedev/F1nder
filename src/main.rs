@@ -12,10 +12,10 @@ use ratatui::widgets::ListState;
 use serde::{Deserialize, Serialize};
 mod ui;
 
-static TEMP_FILE_PATH: OnceLock<String> = OnceLock::new();
+static PREV_SEARCH_PATH: OnceLock<String> = OnceLock::new();
 
-pub fn get_temp_path() -> &'static str {
-    TEMP_FILE_PATH.get_or_init(|| {
+pub fn get_prev_search_path() -> &'static str {
+    PREV_SEARCH_PATH.get_or_init(|| {
         #[cfg(target_os = "windows")]
         return std::env::var("TEMP").unwrap_or("C:\\Windows\\Temp".into()) + "\\prev_search.txt";
 
@@ -120,6 +120,7 @@ pub struct App {
     pub current_chain_index: usize,
     pub cmds_dir: PathBuf,
     pub chains_dir: PathBuf,
+    pub dirty: bool,
 }
 
 impl App {
@@ -140,13 +141,13 @@ impl App {
             .collect();
         Self {
             entries,
-            query: fs::read_to_string(get_temp_path())
+            query: fs::read_to_string(get_prev_search_path())
                 .unwrap_or(String::new())
                 .lines()
                 .nth(0)
                 .unwrap_or("")
                 .to_owned(),
-            mode: match fs::read_to_string(get_temp_path())
+            mode: match fs::read_to_string(get_prev_search_path())
                 .unwrap_or(String::new())
                 .lines()
                 .nth(1)
@@ -160,7 +161,7 @@ impl App {
             top_tab: 0,
             list_state,
             results: vec![],
-            cursor_index: fs::read_to_string(get_temp_path())
+            cursor_index: fs::read_to_string(get_prev_search_path())
                 .unwrap_or(String::new())
                 .lines()
                 .nth(0)
@@ -173,6 +174,7 @@ impl App {
             current_chain_index: 0,
             cmds_dir,
             chains_dir,
+            dirty: false,
         }
     }
 
@@ -218,7 +220,6 @@ impl App {
         }
 
         for (filepath, ef) in &entries_by_filename {
-            // println!("Writing to {}", filepath.to_string_lossy().as_ref());
             let mut file = OpenOptions::new()
                 .write(true)
                 .create(true)
@@ -323,7 +324,10 @@ impl App {
     }
 
     pub fn save_prev_search(&self) {
-        let _ = fs::write(get_temp_path(), format!("{}\n{}", self.query, self.mode));
+        let _ = fs::write(
+            get_prev_search_path(),
+            format!("{}\n{}", self.query, self.mode),
+        );
     }
 }
 
@@ -382,8 +386,10 @@ fn main() -> Result<()> {
 
     ratatui::run(|terminal| ui::run_event_loop(terminal, &mut app))?;
 
-    app.write_entries_to_json()?;
-    app.write_chains_to_json()?;
+    if app.dirty {
+        app.write_entries_to_json()?;
+        app.write_chains_to_json()?;
+    }
     app.save_prev_search();
 
     Ok(())
