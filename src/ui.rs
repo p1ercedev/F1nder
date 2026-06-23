@@ -620,6 +620,15 @@ fn search(app: &mut App, reset_selection: bool) {
 
     let mut matcher = nucleo::Matcher::new(Config::DEFAULT);
     let pattern = Pattern::parse(&app.query, CaseMatching::Ignore, Normalization::Smart);
+    let query_lower = app.query.to_lowercase();
+
+    let substr_bonus = |text: &str| -> u32 {
+        if text.to_lowercase().contains(&query_lower) {
+            128
+        } else {
+            0
+        }
+    };
 
     let mut scored: Vec<(usize, u32)> = Vec::new();
 
@@ -629,14 +638,14 @@ fn search(app: &mut App, reset_selection: bool) {
                 let mut buf = Vec::new();
                 let haystack = nucleo::Utf32Str::new(entry.cmd.as_str(), &mut buf);
                 if let Some(score) = pattern.score(haystack, &mut matcher) {
-                    scored.push((i, score));
+                    scored.push((i, score.saturating_add(substr_bonus(&entry.cmd))));
                 }
             }
             SearchMode::TITLE => {
                 let mut buf = Vec::new();
                 let haystack = nucleo::Utf32Str::new(entry.title.as_str(), &mut buf);
                 if let Some(score) = pattern.score(haystack, &mut matcher) {
-                    scored.push((i, score));
+                    scored.push((i, score.saturating_add(substr_bonus(&entry.title))));
                 }
             }
             SearchMode::HEADING => {
@@ -644,7 +653,7 @@ fn search(app: &mut App, reset_selection: bool) {
                 let mut buf = Vec::new();
                 let haystack = nucleo::Utf32Str::new(&temp_string, &mut buf);
                 if let Some(score) = pattern.score(haystack, &mut matcher) {
-                    scored.push((i, score));
+                    scored.push((i, score.saturating_add(substr_bonus(&temp_string))));
                 }
             }
             SearchMode::ALL => {
@@ -667,7 +676,10 @@ fn search(app: &mut App, reset_selection: bool) {
                     .saturating_add(c_score);
 
                 if combined > 0 {
-                    scored.push((i, combined));
+                    let bonus = substr_bonus(&heading_str)
+                        .max(substr_bonus(&entry.title))
+                        .max(substr_bonus(&entry.cmd));
+                    scored.push((i, combined.saturating_add(bonus)));
                 }
             }
         }
