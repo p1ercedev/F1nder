@@ -6,10 +6,10 @@ the finished command is handed back. Commands invoking `.exe` files, PowerShell
 (`powershell` / `pwsh`), `.ps1` scripts, or recognized PowerShell cmdlets go to
 the clipboard. Other commands print to the terminal after the interface closes.
 Mentioning an `.exe` as a file argument does not trigger clipboard output.
-F1 shows every key (j/k scrolls the overlay). Ctrl+Y outputs the selected command
+F1 shows every key (j/k scrolls the overlay). Ctrl+Y copies the selected command
 and exits from Search or Browse, skipping the fill dialog. Inside the fill
-dialog, Ctrl+Y outputs the current filled command and exits. Both Enter and
-Ctrl+Y use the same destination rules; commands are never executed.
+dialog, Ctrl+Y copies the current filled command and exits. Ctrl+Y always uses
+the clipboard; Enter uses the destination rules above. Commands are never executed.
 
 The three tabs are Search, Browse, and Methodology.
 
@@ -30,11 +30,19 @@ own text. Bare switches (`--no-pass`, `-k`, `2>/dev/null`) get rows too, marked
 | `^U` | clear the row, reverting it to the template's own text |
 | `^D` | disable autofill for this dialog and restore the entire base template, with literal tokens |
 | `^P` / `^N` | cycle the ranked suggestions |
+| `1`–`9` | select a value from the argument's dropdown |
+| `Alt+←` / `Alt+→` | page through dropdown values when there are more than nine |
+| `^Space` | reopen the suggestions dropdown |
+| `Esc` | close the dropdown to type a value; Esc again cancels the dialog |
 | `^T` | switch `/etc/hosts` target |
-| `^Y` | output and exit, leaving remaining rows at their defaults |
+| `^Y` | copy to clipboard and exit, leaving remaining rows at their defaults |
+
+The dropdown opens automatically for each argument with multiple suggestions.
+Picking a value closes it. Typing also closes it; press Esc first when you want
+to type a number from 1–9 instead of selecting a suggestion.
 
 Ctrl+D resets all rows, including your edits, added arguments, and dropped
-parameters. You can then edit manually, press Ctrl+Y to output the literal template,
+parameters. You can then edit manually, press Ctrl+Y to copy the literal template,
 or use Enter to send it through shell integration. Autofill resumes the next
 time you open a command.
 

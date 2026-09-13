@@ -195,37 +195,78 @@ fn windows_command(text: &str) -> bool {
     });
     COMMAND.captures_iter(text).any(|caps| {
         let token = (1..=3).find_map(|i| caps.get(i)).unwrap().as_str();
-        let name = token.rsplit(['/', '\\']).next().unwrap_or(token).to_ascii_lowercase();
-        if name.ends_with(".exe") || name.ends_with(".ps1")
+        let name = token
+            .rsplit(['/', '\\'])
+            .next()
+            .unwrap_or(token)
+            .to_ascii_lowercase();
+        if name.ends_with(".exe")
+            || name.ends_with(".ps1")
             || matches!(name.as_str(), "powershell" | "pwsh" | "iex")
         {
             return true;
         }
         // PowerShell cmdlets/functions use Verb-Noun names. Restrict the verb
         // so Unix commands such as ssh-keygen stay in stdout.
-        token.rsplit(['/', '\\']).next().unwrap_or(token).split_once('-')
+        token
+            .rsplit(['/', '\\'])
+            .next()
+            .unwrap_or(token)
+            .split_once('-')
             .is_some_and(|(verb, noun)| {
-                matches!(verb.to_ascii_lowercase().as_str(),
-                    "get" | "set" | "new" | "remove" | "add" | "clear" |
-                    "invoke" | "import" | "export" | "start" | "stop" |
-                    "test" | "write" | "read" | "out" | "select" | "where" |
-                    "foreach" | "convertto" | "convertfrom" | "join" | "split" |
-                    "enable" | "disable" | "register" | "unregister")
-                    && !noun.is_empty()
+                matches!(
+                    verb.to_ascii_lowercase().as_str(),
+                    "get"
+                        | "set"
+                        | "new"
+                        | "remove"
+                        | "add"
+                        | "clear"
+                        | "invoke"
+                        | "import"
+                        | "export"
+                        | "start"
+                        | "stop"
+                        | "test"
+                        | "write"
+                        | "read"
+                        | "out"
+                        | "select"
+                        | "where"
+                        | "foreach"
+                        | "convertto"
+                        | "convertfrom"
+                        | "join"
+                        | "split"
+                        | "enable"
+                        | "disable"
+                        | "register"
+                        | "unregister"
+                ) && !noun.is_empty()
                     && noun.chars().all(|c| c.is_ascii_alphanumeric())
             })
     })
 }
 
 fn deliver_output(app: &mut App, rendered: &str, direct: bool) {
-    if windows_command(rendered) {
+    deliver_output_using(app, rendered, direct, copy_to_clipboard);
+}
+
+fn deliver_output_using(
+    app: &mut App,
+    rendered: &str,
+    direct: bool,
+    copy: impl FnOnce(&str) -> bool,
+) {
+    if direct || windows_command(rendered) {
         app.result = None;
-        if !copy_to_clipboard(rendered) {
+        if !copy(rendered) {
             eprintln!("f1nder: could not copy command to clipboard");
         }
     } else {
         app.result = Some(rendered.to_owned());
-        if !app.print_result && !direct
+        if !app.print_result
+            && !direct
             && !app.vars_path.to_string_lossy().contains("f1nder-test-vars")
         {
             let _ = crate::usage::drop_for_prompt(rendered);
@@ -240,7 +281,11 @@ fn copy_to_clipboard(text: &str) -> bool {
         use std::process::{Command, Stdio};
         if let Ok(mut child) = Command::new("clip").stdin(Stdio::piped()).spawn() {
             if let Some(stdin) = child.stdin.as_mut() {
-                let _ = stdin.write_all(text.as_bytes());
+                if stdin.write_all(text.as_bytes()).is_err() {
+                    drop(child.stdin.take());
+                    let _ = child.wait();
+                    return false;
+                }
             }
             return child.wait().map(|s| s.success()).unwrap_or(false);
         }
@@ -253,7 +298,11 @@ fn copy_to_clipboard(text: &str) -> bool {
         use std::process::{Command, Stdio};
         if let Ok(mut child) = Command::new("pbcopy").stdin(Stdio::piped()).spawn() {
             if let Some(stdin) = child.stdin.as_mut() {
-                let _ = stdin.write_all(text.as_bytes());
+                if stdin.write_all(text.as_bytes()).is_err() {
+                    drop(child.stdin.take());
+                    let _ = child.wait();
+                    return false;
+                }
             }
             return child.wait().map(|s| s.success()).unwrap_or(false);
         }
@@ -283,7 +332,11 @@ fn copy_to_clipboard(text: &str) -> bool {
         };
 
         if let Some(stdin) = child.stdin.as_mut() {
-            let _ = stdin.write_all(text.as_bytes());
+            if stdin.write_all(text.as_bytes()).is_err() {
+                drop(child.stdin.take());
+                let _ = child.wait();
+                return false;
+            }
         }
         return child.wait().map(|s| s.success()).unwrap_or(false);
     }
@@ -1823,7 +1876,11 @@ fn render_footer(frame: &mut Frame, area: Rect, app: &App) {
     let room = (area.width as usize).saturating_sub(brand.chars().count() + 6);
     let mut hint = hint;
     if hint.chars().count() > room {
-        hint = hint.chars().take(room.saturating_sub(1)).collect::<String>() + "…";
+        hint = hint
+            .chars()
+            .take(room.saturating_sub(1))
+            .collect::<String>()
+            + "…";
     }
     let left = format!("  {hint}");
     let pad =
@@ -5232,6 +5289,8 @@ fn open_fill_or_copy(app: &mut App, idx: usize) -> Result<bool> {
 
     app.fill = Some(Box::new(FillState {
         autofill: true,
+        suggestion_menu: true,
+        suggestion_page: 0,
         title,
         cmd,
         slots,
@@ -5260,11 +5319,7 @@ fn fill_finish(app: &mut App, clipboard_only: bool) -> Result<bool> {
         .map(|c| c.sticky.clone())
         .unwrap_or_default();
     for f in &st.fields {
-        if f.role == fill::Role::Value
-            && f.sticky
-            && !f.dropped
-            && !f.value.trim().is_empty()
-        {
+        if f.role == fill::Role::Value && f.sticky && !f.dropped && !f.value.trim().is_empty() {
             sticky.insert(f.canon.clone(), f.value.clone());
         }
     }
@@ -5334,7 +5389,9 @@ fn next_boundary(s: &str, i: usize) -> usize {
 
 /// Move the focus, keeping the visible window over the field list in sync.
 fn fill_focus(st: &mut FillState, next: usize) {
+    st.suggestion_menu = true;
     st.cur = next.min(st.fields.len().saturating_sub(1));
+    st.suggestion_page = st.fields[st.cur].sugg_idx / 9;
     if st.cur < st.field_scroll {
         st.field_scroll = st.cur;
     }
@@ -5420,6 +5477,7 @@ fn fill_cycle_suggestion(st: &mut FillState, forward: bool) {
     f.value = v;
     f.origin = o;
     f.edited = false;
+    st.suggestion_page = f.sugg_idx / 9;
 }
 
 fn handle_fill_key(app: &mut App, key: KeyEvent) -> Result<bool> {
@@ -5427,13 +5485,58 @@ fn handle_fill_key(app: &mut App, key: KeyEvent) -> Result<bool> {
         .modifiers
         .intersects(KeyModifiers::CONTROL | KeyModifiers::SUPER);
 
+    let st = app.fill.as_mut().unwrap();
+    let menu_open = st.autofill
+        && st.suggestion_menu
+        && !st.fields[st.cur].dropped
+        && st.fields[st.cur].suggestions.len() > 1;
+    if key.code == KeyCode::Char(' ') && ctrl {
+        st.suggestion_menu = true;
+        st.suggestion_page = st.fields[st.cur].sugg_idx / 9;
+        return Ok(false);
+    }
+    if menu_open && !ctrl {
+        match key.code {
+            KeyCode::Esc => {
+                st.suggestion_menu = false;
+                return Ok(false);
+            }
+            KeyCode::Char(c @ '1'..='9') if !key.modifiers.contains(KeyModifiers::ALT) => {
+                let f = &mut st.fields[st.cur];
+                let index = st.suggestion_page * 9 + (c as usize - '1' as usize);
+                if let Some((value, origin)) = f.suggestions.get(index).cloned() {
+                    f.cursor = value.len();
+                    f.value = value;
+                    f.origin = origin;
+                    f.sugg_idx = index;
+                    f.edited = false;
+                    st.suggestion_menu = false;
+                }
+                return Ok(false);
+            }
+            KeyCode::Left | KeyCode::Right if key.modifiers.contains(KeyModifiers::ALT) => {
+                let f = &mut st.fields[st.cur];
+                let pages = f.suggestions.len().div_ceil(9);
+                let page = st.suggestion_page;
+                let next = if key.code == KeyCode::Right {
+                    (page + 1) % pages
+                } else {
+                    (page + pages - 1) % pages
+                };
+                st.suggestion_page = next;
+                return Ok(false);
+            }
+            KeyCode::Char(_) | KeyCode::Backspace | KeyCode::Delete => st.suggestion_menu = false,
+            _ => {}
+        }
+    }
     let completion = fill_completion(app);
     match key.code {
         KeyCode::Esc => {
             app.fill = None;
         }
         // Ctrl+Enter / Ctrl+Y finish from any field, leaving the rest at their
-        // defaults. Ctrl+Y skips the prompt drop file; both auto-route output.
+        // defaults. Ctrl+Y always copies; Ctrl+Enter auto-routes output.
         KeyCode::Enter if ctrl => return fill_finish(app, false),
         KeyCode::Char('y' | 'Y') if ctrl => return fill_finish(app, true),
         KeyCode::Enter => {
@@ -5547,6 +5650,8 @@ fn handle_fill_key(app: &mut App, key: KeyEvent) -> Result<bool> {
             let st = app.fill.as_mut().unwrap();
             let cur = st.cur;
             st.cur = fill::insert_arg(st, cur);
+            st.suggestion_menu = true;
+            st.suggestion_page = 0;
             st.notice = None;
         }
         KeyCode::PageUp => {
@@ -5711,8 +5816,28 @@ fn render_fill(frame: &mut Frame, area: Rect, app: &mut App) {
         .max(1);
 
     let max_height = (area.height.saturating_mul(4) / 5).max(7);
-    let shown = st.fields.len().min(max_height.saturating_sub(5) as usize);
-    let preview_h = wanted_preview_h.min(max_height.saturating_sub(shown as u16 + 4).max(1));
+    let f = &st.fields[st.cur];
+    let menu_open = st.autofill && st.suggestion_menu && !f.dropped && f.suggestions.len() > 1;
+    let menu_start = st
+        .suggestion_page
+        .min(f.suggestions.len().saturating_sub(1) / 9)
+        * 9;
+    let menu_count = if menu_open {
+        (f.suggestions.len() - menu_start).min(9)
+    } else {
+        0
+    };
+    let menu_h = if menu_open {
+        (menu_count as u16 + 2).min(max_height.saturating_sub(6))
+    } else {
+        0
+    };
+    let shown = st
+        .fields
+        .len()
+        .min(max_height.saturating_sub(5 + menu_h).max(1) as usize);
+    let preview_h =
+        wanted_preview_h.min(max_height.saturating_sub(shown as u16 + 4 + menu_h).max(1));
     // Keep the focused row inside the window.
     if st.cur >= st.field_scroll + shown {
         st.field_scroll = st.cur + 1 - shown;
@@ -5721,7 +5846,7 @@ fn render_fill(frame: &mut Frame, area: Rect, app: &mut App) {
         st.field_scroll = st.cur;
     }
 
-    let height = (preview_h + shown as u16 + 4).min(area.height.saturating_sub(2).max(7));
+    let height = (preview_h + shown as u16 + 4 + menu_h).min(area.height.saturating_sub(2).max(7));
     let popup = centered_rect(width, height, area);
 
     let filled_n = st.fields.iter().filter(|f| !f.value.is_empty()).count();
@@ -5746,6 +5871,7 @@ fn render_fill(frame: &mut Frame, area: Rect, app: &mut App) {
         Constraint::Length(preview_h),
         Constraint::Length(1),
         Constraint::Min(0),
+        Constraint::Length(menu_h),
         Constraint::Length(1),
     ])
     .split(inner);
@@ -5883,6 +6009,47 @@ fn render_fill(frame: &mut Frame, area: Rect, app: &mut App) {
     }
     frame.render_widget(Paragraph::new(items), rows[2]);
 
+    if menu_open {
+        let f = &st.fields[st.cur];
+        let choices: Vec<Line> = f
+            .suggestions
+            .iter()
+            .enumerate()
+            .skip(menu_start)
+            .take(menu_count)
+            .map(|(i, (value, origin))| {
+                Line::from(vec![
+                    Span::styled(
+                        format!(" {}  ", i - menu_start + 1),
+                        Style::default().fg(C_ACCENT),
+                    ),
+                    Span::styled(
+                        value.replace(['\n', '\r', '\t'], " "),
+                        Style::default().fg(C_TITLE),
+                    ),
+                    Span::styled(
+                        format!("  · {}", origin.label()),
+                        Style::default().fg(C_GUIDE),
+                    ),
+                ])
+            })
+            .collect();
+        frame.render_widget(
+            Paragraph::new(choices).block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(C_ACCENT))
+                    .title(format!(
+                        " {} · 1–9 select · Alt+←/→ page {}/{} · Esc type ",
+                        f.label,
+                        menu_start / 9 + 1,
+                        f.suggestions.len().div_ceil(9)
+                    )),
+            ),
+            rows[3],
+        );
+    }
+
     // ── hint bar ──────────────────────────────────────────────────────
     let last = st.cur + 1 >= st.fields.len();
     let advance = if last { "⏎ copy & exit" } else { "⏎ next" };
@@ -5898,13 +6065,14 @@ fn render_fill(frame: &mut Frame, area: Rect, app: &mut App) {
         .filter(|part| !part.starts_with('⏎') && !part.starts_with("^T"))
         .collect::<Vec<_>>()
         .join(" · ");
-    let hint = st.notice.clone().unwrap_or_else(|| {
-        format!("{advance} · {rest}{target_hint} · env.sh · Esc cancel")
-    });
+    let hint = st
+        .notice
+        .clone()
+        .unwrap_or_else(|| format!("{advance} · {rest}{target_hint} · env.sh · Esc cancel"));
     frame.render_widget(
         Paragraph::new(Line::from(Span::styled(hint, Style::default().fg(C_DIM))))
             .alignment(Alignment::Center),
-        rows[3],
+        rows[4],
     );
 
     // ── cursor on the focused value ───────────────────────────────────
@@ -5921,34 +6089,49 @@ fn render_fill(frame: &mut Frame, area: Rect, app: &mut App) {
 
 #[cfg(test)]
 mod tests {
-    use super::{finish_output, windows_command};
+    use super::windows_command;
     #[test]
     fn command_output_destination() {
         for cmd in [
-            "tool.exe /help", "./TOOL.EXE", "& \"C:\\Program Files\\Tool.exe\"",
-            "powershell -Command Get-Date", "pwsh -File script.ps1",
-            "Get-Process", "$x = New-Object System.Object", ". ./script.ps1",
-            "echo ready; tool.exe", "Get-Date | Out-String",
+            "tool.exe /help",
+            "./TOOL.EXE",
+            "& \"C:\\Program Files\\Tool.exe\"",
+            "powershell -Command Get-Date",
+            "pwsh -File script.ps1",
+            "Get-Process",
+            "$x = New-Object System.Object",
+            ". ./script.ps1",
+            "echo ready; tool.exe",
+            "Get-Date | Out-String",
         ] {
             assert!(windows_command(cmd), "{cmd}");
         }
         for cmd in [
-            "whoami", "ls -la", "ssh-keygen -t ed25519",
+            "whoami",
+            "ls -la",
+            "ssh-keygen -t ed25519",
             "curl https://example.com/tool.exe -o tool.exe",
-            "echo powershell", "file tool.exe", "cat script.ps1",
+            "echo powershell",
+            "file tool.exe",
+            "cat script.ps1",
         ] {
             assert!(!windows_command(cmd), "{cmd}");
         }
     }
 
     #[test]
-    fn terminal_output_works_with_both_shortcuts_and_print_modes() {
+    fn clipboard_shortcut_overrides_output_routing_in_both_print_modes() {
         for print in [false, true] {
             for direct in [false, true] {
                 let mut app = app_named("ls -la", "output-routing");
                 app.print_result = print;
-                finish_output(&mut app, 0, "ls -la".into(), Default::default(), direct).unwrap();
-                assert_eq!(app.result.as_deref(), Some("ls -la"));
+                let mut copied = None;
+                super::deliver_output_using(&mut app, "ls -la", direct, |text| {
+                    copied = Some(text.to_owned());
+                    true
+                });
+                assert_eq!(copied.as_deref(), direct.then_some("ls -la"));
+                assert_eq!(app.result.as_deref(), (!direct).then_some("ls -la"));
             }
         }
     }
@@ -6287,6 +6470,29 @@ azurenum --interactive\n";
     }
 
     #[test]
+    fn numbered_suggestions_select_page_and_allow_numeric_editing() {
+        let mut app = app_named("nxc smb TARGET -u USER", "dropdown");
+        open_fill_or_copy(&mut app, 0).unwrap();
+        app.fill.as_mut().unwrap().fields[0].suggestions = (0..12)
+            .map(|i| (format!("10.0.0.{i}"), fill::Origin::Hosts))
+            .collect();
+        let before = app.fill.as_ref().unwrap().fields[0].value.clone();
+        handle_fill_key(&mut app, KeyEvent::new(KeyCode::Right, KeyModifiers::ALT)).unwrap();
+        assert_eq!(app.fill.as_ref().unwrap().fields[0].value, before);
+        handle_fill_key(&mut app, key(KeyCode::Char('2'))).unwrap();
+        let st = app.fill.as_ref().unwrap();
+        assert_eq!(st.fields[0].value, "10.0.0.10");
+        assert_eq!(st.fields[0].sugg_idx, 10);
+        assert!(!st.suggestion_menu);
+        handle_fill_key(&mut app, ctrl(' ')).unwrap();
+        handle_fill_key(&mut app, key(KeyCode::Esc)).unwrap();
+        handle_fill_key(&mut app, key(KeyCode::Char('9'))).unwrap();
+        assert_eq!(app.fill.as_ref().unwrap().fields[0].value, "10.0.0.109");
+        handle_fill_key(&mut app, key(KeyCode::Tab)).unwrap();
+        assert!(app.fill.as_ref().unwrap().suggestion_menu);
+    }
+
+    #[test]
     fn disable_autofill_restores_literal_template() {
         let cmd = "nxc smb 'TARGET' -u 'USER' -p 'PASSWORD' --no-pass";
         let mut app = app_named(cmd, "base-template");
@@ -6337,7 +6543,7 @@ azurenum --interactive\n";
         assert!(app.fill.as_ref().unwrap().autofill);
     }
 
-    /// Ctrl+Y finishes early, leaving untouched fields at their defaults.
+    /// Ctrl+Enter finishes early, leaving untouched fields at their defaults.
     #[test]
     fn copy_now_leaves_defaults_intact() {
         let cmd = "nxc smb 10.129.5.5 -u htb-student -p 'Password1'";
@@ -6345,7 +6551,13 @@ azurenum --interactive\n";
         app.print_result = true;
         open_fill_or_copy(&mut app, 0).unwrap();
         assert_eq!(fill::render_filled(app.fill.as_ref().unwrap()), cmd);
-        assert!(handle_fill_key(&mut app, ctrl('y')).unwrap());
+        assert!(
+            handle_fill_key(
+                &mut app,
+                KeyEvent::new(KeyCode::Enter, KeyModifiers::CONTROL)
+            )
+            .unwrap()
+        );
         assert!(app.fill.is_none());
         assert_eq!(app.result.as_deref(), Some(cmd));
         let _ = std::fs::remove_file("/tmp/f1nder-test-vars-copynow.json");

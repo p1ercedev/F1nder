@@ -598,6 +598,8 @@ impl HostTarget {
 pub struct FillState {
     /// Whether automatic suggestions and completions are enabled for this dialog.
     pub autofill: bool,
+    pub suggestion_menu: bool,
+    pub suggestion_page: usize,
     pub title: String,
     pub cmd: String,
     pub slots: Vec<Slot>,
@@ -1722,7 +1724,8 @@ fn add_flag_rows(cmd: &str, toks: &[Tok], fields: &mut Vec<Field>, slots: &mut V
         // not an argument; dropping it would leave a bare flag list.
         let leads = i == 0 || toks[i - 1].sep;
         let hit = |a: usize, b: usize| {
-            taken.iter().any(|&(x, y)| a < y && x < b) || owned.iter().any(|&(x, y)| a >= x && b <= y)
+            taken.iter().any(|&(x, y)| a < y && x < b)
+                || owned.iter().any(|&(x, y)| a >= x && b <= y)
         };
         if leads || hit(tok.raw_start, tok.raw_end) {
             continue;
@@ -2466,6 +2469,8 @@ pub fn audit(entries: &[(String, String, String)], filter: Option<&str>) {
             let (fields, slots) = detect(cmd);
             let state = FillState {
                 autofill: true,
+                suggestion_menu: true,
+                suggestion_page: 0,
                 title: String::new(),
                 cmd: cmd.clone(),
                 slots: slots.clone(),
@@ -2553,6 +2558,8 @@ pub fn audit(entries: &[(String, String, String)], filter: Option<&str>) {
         let (fields, slots) = detect(cmd);
         let st = FillState {
             autofill: true,
+            suggestion_menu: true,
+            suggestion_page: 0,
             title: String::new(),
             cmd: cmd.clone(),
             slots,
@@ -2668,6 +2675,8 @@ mod tests {
         let (fields, slots) = detect(cmd);
         let st = FillState {
             autofill: true,
+            suggestion_menu: true,
+            suggestion_page: 0,
             title: String::new(),
             cmd: cmd.to_string(),
             slots,
@@ -2921,13 +2930,9 @@ mod tests {
         for f in &fields {
             let expected = meaningful_canon(&f.canon);
             assert_eq!(
-                f.sticky,
-                expected,
+                f.sticky, expected,
                 "{} (canon {}) sticky={} but meaningful={}",
-                f.label,
-                f.canon,
-                f.sticky,
-                expected
+                f.label, f.canon, f.sticky, expected
             );
         }
         // Specifically: the short-option artefacts and the shape-derived
@@ -3124,6 +3129,8 @@ mod tests {
         fields[field].dropped = true;
         render_filled(&FillState {
             autofill: true,
+            suggestion_menu: true,
+            suggestion_page: 0,
             title: String::new(),
             cmd: cmd.into(),
             slots,
@@ -3141,6 +3148,8 @@ mod tests {
         let (fields, slots) = detect(cmd);
         FillState {
             autofill: true,
+            suggestion_menu: true,
+            suggestion_page: 0,
             title: String::new(),
             cmd: cmd.into(),
             slots,
@@ -3244,10 +3253,17 @@ mod tests {
             .position(|f| f.label == "USER")
             .expect("USER row");
         let new = insert_arg(&mut st, at);
-        assert_eq!(render_filled(&st), cmd, "empty added row changed the command");
+        assert_eq!(
+            render_filled(&st),
+            cmd,
+            "empty added row changed the command"
+        );
 
         st.fields[new].value = "--local-auth".into();
-        assert_eq!(render_filled(&st), "nxc smb TARGET -u USER --local-auth -p PASS");
+        assert_eq!(
+            render_filled(&st),
+            "nxc smb TARGET -u USER --local-auth -p PASS"
+        );
     }
 
     /// A quoted value's slot stops inside the quotes; an inserted argument
