@@ -2001,7 +2001,20 @@ impl VarContext {
     /// Read everything off the machine. Called lazily on the first fill so
     /// startup stays instant.
     pub fn build(vars_path: &Path) -> Self {
-        let sticky = load_sticky(vars_path);
+        let mut sticky = load_sticky(vars_path);
+        let history = harvest_history();
+
+        // Credentials used in the terminal (shell history) are the ground
+        // truth for "last used." Merge the most recent history value into
+        // the sticky store so cross-tool usage propagates automatically.
+        for (canon, values) in &history {
+            if let Some(newest) = values.first() {
+                if meaningful_canon(canon) {
+                    sticky.insert(canon.clone(), newest.clone());
+                }
+            }
+        }
+
         let mut by_kind: HashMap<VarKind, Vec<String>> = HashMap::new();
         for (canon, value) in &sticky {
             let upper = canon.to_uppercase();
@@ -2018,7 +2031,6 @@ impl VarContext {
                 values.push(value.clone());
             }
         }
-        let history = harvest_history();
         let hosts = parse_hosts(&history_lines_cache());
         let mut env = HashMap::new();
         for (var, canon) in ENV_RULES {
@@ -2054,17 +2066,18 @@ impl VarContext {
             out.push((v.to_string(), o));
         };
 
-        // A bare positional has no name worth sharing across commands: the
-        // corpus literal is what says *which kind* of value belongs there — a
-        // username list, not whichever wordlist you last used. So it leads,
-        // and the harvested alternatives stay one ^N away.
+        // The sticky store holds the most recently used value across all
+        // commands — top priority so a target switch propagates everywhere.
+        if f.sticky {
+            if let Some(v) = self.sticky.get(&f.canon) {
+                push(v, Origin::Sticky, &mut out);
+            }
+        }
         if let Some(v) = recall.and_then(|r| r.get(&f.canon)) {
             push(v, Origin::Recall, &mut out);
         }
         if !f.sticky {
             push(&f.literal, Origin::Literal, &mut out);
-        } else if let Some(v) = self.sticky.get(&f.canon) {
-            push(v, Origin::Sticky, &mut out);
         }
         if let Some(t) = target {
             match f.kind {
