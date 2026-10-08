@@ -203,6 +203,13 @@ const FLAG_RULES: &[(&str, VarKind, &str)] = &[
     ("-I", VarKind::Iface, "iface"),
     ("-i", VarKind::Iface, "iface"),
     ("--interface", VarKind::Iface, "iface"),
+    ("--host", VarKind::Fqdn, "dc_fqdn"),
+    ("-target", VarKind::Host, "target"),
+    ("--target", VarKind::Host, "target"),
+    ("-U", VarKind::User, "user"),
+    ("--port", VarKind::Port, "port"),
+    ("-impersonate", VarKind::User, "target_user"),
+    ("--server", VarKind::Host, "dc_ip"),
 ];
 
 /// Flags that mean something different depending on the tool. `None` means the
@@ -232,6 +239,16 @@ const TOOL_FLAG_OVERRIDES: &[ToolFlagOverride] = &[
     ("nikto", "-u", Some((VarKind::Other, "url"))),
     ("sqlmap", "-u", Some((VarKind::Other, "url"))),
     ("wpscan", "-u", Some((VarKind::Other, "url"))),
+    // evil-winrm's `-i` is the target host, not an interface.
+    ("evil-winrm", "-i", Some((VarKind::Ip, "target_ip"))),
+    ("evil-winrm-py", "-i", Some((VarKind::Ip, "target_ip"))),
+    // smbmap's `-H` is a host, not a hash.
+    ("smbmap", "-H", Some((VarKind::Host, "target"))),
+    // wpscan's `-U` is a user enumeration file, not a username.
+    ("wpscan", "-U", None),
+    ("wpscan", "-P", Some((VarKind::File, "wordlist"))),
+    // ldapsearch's `-H` is a URI, not a hash.
+    ("ldapsearch", "-H", None),
 ];
 
 /// The program names invoked by a command — one per pipeline segment, so
@@ -1178,7 +1195,10 @@ fn push_arg(cmd: &str, raws: &mut Vec<Raw>, label: String, s: usize, e: usize) {
     if !arg_fillable(v) {
         return;
     }
-    // A placeholder names itself better than the option that carries it.
+    // A placeholder (USER, DC_IP) names itself and should pull from the
+    // sticky store. A concrete value (xmlrpc, u,vp,vt,cb,dbe, an API key)
+    // is an intentional template default — keep it unless the user edits.
+    let is_ph = placeholderish(v) || lookup(v).is_some();
     let label = if placeholderish(v) {
         v.to_string()
     } else {
@@ -1189,12 +1209,7 @@ fn push_arg(cmd: &str, raws: &mut Vec<Raw>, label: String, s: usize, e: usize) {
         start: s,
         end: e,
         kind: infer_kind(v),
-        // Tier 4 names a field after the option that carried it, so `-m`, `-c`
-        // and `-x` become canons `m`, `c`, `x`. Those mean nothing outside the
-        // one command they came from, and remembering them fills `vars.json`
-        // with junk that then feeds the by-kind completion pool. Fill them,
-        // don't keep them.
-        sticky: meaningful_canon(&canon),
+        sticky: is_ph && meaningful_canon(&canon),
         canon,
         label,
         tier: 4,
@@ -2516,6 +2531,39 @@ fn harvest_history() -> HashMap<String, Vec<String>> {
                 break;
             }
         }
+        // `rustscan -a <target>` / `nmap <target>` — scan targets.
+        let mut it = line.split_whitespace();
+        while let Some(w) = it.next() {
+            if w.ends_with("rustscan") {
+                for arg in it.by_ref() {
+                    if arg == "-a" || arg == "--addresses" {
+                        if let Some(t) = it.next() {
+                            add("target_ip", t, &mut out);
+                            add("dc_ip", t, &mut out);
+                        }
+                        break;
+                    }
+                }
+                break;
+            }
+            if w.ends_with("nmap") || w.ends_with("masscan") {
+                let iter = it.by_ref();
+                while let Some(arg) = iter.next() {
+                    if !arg.starts_with('-') {
+                        add("target_ip", arg, &mut out);
+                        add("dc_ip", arg, &mut out);
+                        break;
+                    }
+                    if matches!(arg, "-p" | "-oN" | "-oG" | "-oX" | "-oA"
+                        | "-e" | "--script" | "--min-rate" | "--max-rate"
+                        | "-T" | "--top-ports" | "-iL" | "--exclude")
+                    {
+                        let _ = iter.next();
+                    }
+                }
+                break;
+            }
+        }
     }
     out
 }
@@ -3002,7 +3050,7 @@ mod tests {
         let cmd = "ldapnomnom --input users --output multiservers.txt --dnsdomain westbridge.hsm \
                    --maxservers 32 --parallel 16 --server 10.0.10.15 --dump";
         let l = labels(cmd);
-        for want in ["INPUT", "OUTPUT", "DOMAIN", "MAXSERVERS", "PARALLEL", "IP"] {
+        for want in ["INPUT", "OUTPUT", "DOMAIN", "MAXSERVERS", "PARALLEL", "DC_IP"] {
             assert!(l.contains(&want.to_string()), "{l:?} missing {want}");
         }
         // `--dump` takes nothing and there is nothing after it to swallow.
