@@ -145,6 +145,8 @@ const CANON: &[(&str, VarKind, &str)] = &[
     ("DBNAME", VarKind::Other, "dbname"),
     ("APPURL", VarKind::Other, "appurl"),
     ("OUTFILE", VarKind::File, "outfile"),
+    ("FILEPATH", VarKind::File, "filepath"),
+    ("FILENAME", VarKind::File, "filename"),
 ];
 
 /// Tokens that are genuine placeholders in some commands and ordinary literals
@@ -692,7 +694,9 @@ fn plausible(kind: VarKind, v: &str) -> bool {
     if v.is_empty() || v.len() > 128 || v.chars().any(char::is_whitespace) {
         return false;
     }
-    if v.contains(['>', '<', '|', '{', '}', '&', '\\', '*', '(', ')']) {
+    if kind != VarKind::Pass
+        && v.contains(['>', '<', '|', '{', '}', '&', '\\', '*', '(', ')'])
+    {
         return false;
     }
     // A canonical placeholder token is always fine, whatever the flag says.
@@ -976,6 +980,15 @@ const NON_SHELL_HEADS: &[&str] = &[
 fn commandish(cmd: &str) -> bool {
     let head = cmd.trim_start();
     if head.starts_with(['{', '<', '[', '#']) {
+        return false;
+    }
+    // PowerShell variable assignments (`$INSTALLED = Get-ItemProperty …`):
+    // the real program is a cmdlet, not a positional, and property lists
+    // like `DisplayName, DisplayVersion` are syntax, not fill-in values.
+    // Tiers 0–3 still detect any CANON placeholders inside.
+    if head.starts_with('$')
+        && head.as_bytes().get(1).is_some_and(|b| b.is_ascii_alphabetic())
+    {
         return false;
     }
     let first = head
@@ -1341,13 +1354,36 @@ fn tier4(cmd: &str, raws: &mut Vec<Raw>) {
         state = 2;
 
         // `NAME=VALUE` (msfvenom, module options): only the value is a slot.
+        // These are per-module settings, not global variables — rely on
+        // per-entry recall instead of the sticky store so `PATTERN=.ps1`
+        // from spider_plus doesn't pollute a different module's PATTERN.
         if let Some(eq) = val.find('=')
             && eq > 0
             && val[..eq]
                 .chars()
                 .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-'))
         {
-            push_arg(cmd, raws, flag_label(&val[..eq]), t.start + eq + 1, t.end);
+            let (vs, ve) = unquote_span(cmd, t.start + eq + 1, t.end);
+            if vs < ve {
+                let v = &cmd[vs..ve];
+                if arg_fillable(v) {
+                    let label = if placeholderish(v) {
+                        v.to_string()
+                    } else {
+                        flag_label(&val[..eq])
+                    };
+                    let canon = label.to_lowercase();
+                    raws.push(Raw {
+                        start: vs,
+                        end: ve,
+                        kind: infer_kind(v),
+                        sticky: false,
+                        canon,
+                        label,
+                        tier: 4,
+                    });
+                }
+            }
             i += 1;
             continue;
         }
@@ -2015,6 +2051,62 @@ impl VarContext {
             }
         }
 
+        let hosts = parse_hosts(&history_lines_cache());
+
+        // When dc_ip came from an nxc FQDN target, resolve through
+        // /etc/hosts and propagate related fields (dc_fqdn, domain).
+        if let Some(val) = sticky.get("dc_ip").cloned() {
+            if !val.is_empty() {
+                let find = |v: &str| {
+                    hosts.iter().find(|t| {
+                        t.ip == v
+                            || t.fqdn.eq_ignore_ascii_case(v)
+                            || t.short.eq_ignore_ascii_case(v)
+                            || (!t.domain.is_empty()
+                                && t.domain.eq_ignore_ascii_case(v))
+                    })
+                };
+                if let Some(t) = find(&val) {
+                    if !is_ipv4(&val) {
+                        sticky.insert("dc_ip".to_string(), t.ip.clone());
+                    }
+                    // A proper DC FQDN has the shape host.domain.tld (2+ dots).
+                    if t.fqdn.matches('.').count() >= 2 {
+                        sticky.insert("dc_fqdn".to_string(), t.fqdn.clone());
+                    }
+                    if t.domain.contains('.') {
+                        sticky.insert("domain".to_string(), t.domain.clone());
+                    }
+                }
+            }
+        }
+        // A dc_fqdn whose IP differs from dc_ip is stale (previous box).
+        if let (Some(ip), Some(fqdn)) =
+            (sticky.get("dc_ip").cloned(), sticky.get("dc_fqdn").cloned())
+        {
+            if !fqdn.is_empty()
+                && !hosts.iter().any(|t| {
+                    t.fqdn.eq_ignore_ascii_case(&fqdn) && t.ip == ip
+                })
+            {
+                sticky.remove("dc_fqdn");
+            }
+        }
+        for canon in ["target_ip"] {
+            if let Some(val) = sticky.get(canon).cloned() {
+                if !val.is_empty() && !is_ipv4(&val) {
+                    if let Some(t) = hosts.iter().find(|t| {
+                        t.fqdn.eq_ignore_ascii_case(&val)
+                            || t.short.eq_ignore_ascii_case(&val)
+                            || (!t.domain.is_empty()
+                                && t.domain.eq_ignore_ascii_case(&val))
+                    }) {
+                        sticky.insert(canon.to_string(), t.ip.clone());
+                    }
+                }
+            }
+        }
+
         let mut by_kind: HashMap<VarKind, Vec<String>> = HashMap::new();
         for (canon, value) in &sticky {
             let upper = canon.to_uppercase();
@@ -2031,7 +2123,7 @@ impl VarContext {
                 values.push(value.clone());
             }
         }
-        let hosts = parse_hosts(&history_lines_cache());
+
         let mut env = HashMap::new();
         for (var, canon) in ENV_RULES {
             if let Ok(v) = std::env::var(var)
@@ -2366,6 +2458,16 @@ fn harvest_history() -> HashMap<String, Vec<String>> {
             }
             if plausible(kind, val.as_str()) {
                 add(canon, val.as_str(), &mut out);
+                // A `-u MACHINE$` is an AD computer account — also store the
+                // base name under "computer" so COMPUTER$ fields pick it up.
+                if canon == "user" {
+                    let v = val.as_str().trim_matches('\'').trim_matches('"');
+                    if let Some(base) = v.strip_suffix('$') {
+                        if !base.is_empty() {
+                            add("computer", base, &mut out);
+                        }
+                    }
+                }
             }
         }
         for m in assign_re().captures_iter(&line) {
@@ -2390,6 +2492,13 @@ fn harvest_history() -> HashMap<String, Vec<String>> {
                     && plausible(kind, c.as_str())
                 {
                     add(canon, c.as_str(), &mut out);
+                    if canon == "user" {
+                        if let Some(base) = c.as_str().strip_suffix('$') {
+                            if !base.is_empty() {
+                                add("computer", base, &mut out);
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -2402,6 +2511,7 @@ fn harvest_history() -> HashMap<String, Vec<String>> {
                     && !t.starts_with('-')
                 {
                     add("target", t, &mut out);
+                    add("dc_ip", t, &mut out);
                 }
                 break;
             }

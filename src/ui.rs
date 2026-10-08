@@ -1286,7 +1286,7 @@ fn handle_key_event<B: Backend>(app: &mut App, terminal: &mut Terminal<B>) -> Re
                 app.recents_active = true;
                 app.recent_sel = 0;
             }
-            KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            KeyCode::Char('u' | 'U') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 app.query.clear();
                 app.cursor_index = 0;
                 search(app, true);
@@ -2452,7 +2452,7 @@ fn handle_browse_key<B: Backend>(
         }
         // Incremental filter typing. Editing the filter resets transient
         // collapse state so new matches are revealed.
-        KeyCode::Char('u') if ctrl => {
+        KeyCode::Char('u' | 'U') if ctrl => {
             app.browse_query.clear();
             app.browse_collapsed.clear();
             app.browse_state.select(Some(0));
@@ -3967,7 +3967,7 @@ fn handle_method_key<B: Backend>(
             KeyCode::Char('k') if app.method_jump_nav && plain => {
                 app.method_jump_sel = app.method_jump_sel.saturating_sub(1);
             }
-            KeyCode::Char('u') if ctrl => {
+            KeyCode::Char('u' | 'U') if ctrl => {
                 app.method_query.clear();
                 app.method_jump_sel = 0;
             }
